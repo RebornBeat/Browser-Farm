@@ -1,0 +1,90 @@
+{
+  "name": "client",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "axios": "^1.13.2",
+    "electron": "^39.2.7",
+    "electron-store": "^11.0.2",
+    "framer-motion": "^12.24.0",
+    "lucide-react": "^0.562.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "react-router-dom": "^7.11.0",
+    "react-scripts": "5.0.1",
+    "recharts": "^3.6.0"
+  },
+  "scripts": {
+    "start": "concurrently \"npm run react-start\" \"wait-on http://localhost:3000 && electron .\"",
+    "react-start": "craco start",
+    "react-build": "craco build",
+    "test": "craco test",
+    "build": "npm run react-build && electron-builder",
+    "dist": "npm run react-build && electron-builder --win --mac --linux",
+    "dist:win": "npm run react-build && electron-builder --win",
+    "dist:mac": "npm run react-build && electron-builder --mac",
+    "dist:linux": "npm run react-build && electron-builder --linux",
+    "dev": "concurrently \"npm run react-start\" \"wait-on http://localhost:3000 && electron . --dev\""
+  },
+  "main": "electron.js",
+  "homepage": "./",
+  "build": {
+    "appId": "com.browserfarm.client",
+    "productName": "Browser Farm",
+    "files": [
+      "build/**/*",
+      "electron.js",
+      "preload.js",
+      "node_modules/**/*"
+    ],
+    "directories": {
+      "buildResources": "public"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "public/icon.png"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "public/icon.png",
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "public/icon.png",
+      "category": "Development"
+    }
+  },
+  "eslintConfig": {
+    "extends": "react-app"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "@craco/craco": "^7.1.0",
+    "@tailwindcss/forms": "^0.5.11",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.2.1",
+    "electron-builder": "^26.0.12",
+    "postcss": "^8.5.1",
+    "tailwindcss": "^3.4.17",
+    "tailwindcss-animate": "^1.0.7",
+    "wait-on": "^9.0.3"
+  }
+}

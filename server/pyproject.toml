@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "browser-farm"
+version = "0.1.0"
+description = "A distributed browser automation platform for developers. Manage multiple browser contexts across multiple servers with live monitoring, manual control, and custom scripts."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "playwright>=1.41.0",
+    "psutil>=5.9.8",
+    "python-multipart>=0.0.6",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.5.3",
+    "pydantic-settings>=2.1.0",
+    "websockets>=12.0",
+    "aiofiles>=23.2.1",
+    "pillow>=10.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/RebornBeat/Browser-Farm"
+
+[tool.setuptools.packages.find]
+where = ["src"]
