@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Plus, Server, Trash2, CheckCircle, XCircle } from "lucide-react";
 import store from "../store/db";
 import { apiClient } from "../api/client";
@@ -13,36 +13,55 @@ function ServerList() {
   });
   const [serverHealth, setServerHealth] = useState({});
 
+  // ✅ USE REF TO TRACK CURRENT SERVERS
+  const serversRef = useRef([]);
+
   useEffect(() => {
     loadServers();
-    const interval = setInterval(() => checkHealth(), 30000);
+
+    // ✅ HEALTH CHECK INTERVAL THAT USES REF
+    const interval = setInterval(() => {
+      console.log("⏰ Health check interval triggered");
+      checkHealth(serversRef.current); // Use ref instead of state
+    }, 30000);
+
     return () => clearInterval(interval);
   }, []);
+
+  // ✅ UPDATE REF WHENEVER SERVERS CHANGE
+  useEffect(() => {
+    serversRef.current = servers;
+  }, [servers]);
 
   const loadServers = async () => {
     const storedServers = (await store.get("servers")) || [];
     setServers(storedServers);
+    serversRef.current = storedServers; // ✅ Update ref immediately
 
     // Add servers to API client
     storedServers.forEach((server) => {
       apiClient.addServer(server.id, server.url, server.apiKey);
     });
 
-    // Check health with loaded servers
+    // Initial health check
     checkHealth(storedServers);
   };
 
   const checkHealth = async (serversToCheck) => {
-    const serverList = serversToCheck || servers;
+    if (!serversToCheck || serversToCheck.length === 0) {
+      console.log("⚠️ No servers to check");
+      return;
+    }
+
     const health = {};
 
-    console.log("🔍 Checking health for servers:", serverList);
+    console.log(`🔍 Checking health for ${serversToCheck.length} server(s)`);
 
-    for (const server of serverList) {
+    for (const server of serversToCheck) {
       console.log(`📡 Pinging ${server.name} at ${server.url}`);
       try {
         const data = await apiClient.getHealth(server.id);
-        console.log(`✅ ${server.name} is ONLINE:`, data);
+        console.log(`✅ ${server.name} is ONLINE`);
         health[server.id] = { status: "online", ...data };
       } catch (error) {
         console.error(`❌ ${server.name} is OFFLINE:`, error.message);
@@ -50,7 +69,7 @@ function ServerList() {
       }
     }
 
-    console.log("📊 Final health status:", health);
+    console.log("📊 Health check complete:", health);
     setServerHealth(health);
   };
 
@@ -64,13 +83,14 @@ function ServerList() {
     const updatedServers = [...servers, server];
     await store.set("servers", updatedServers);
     setServers(updatedServers);
+    serversRef.current = updatedServers; // ✅ Update ref
 
     apiClient.addServer(server.id, server.url, server.apiKey);
 
     setShowAddModal(false);
     setNewServer({ name: "", url: "", apiKey: "" });
 
-    // Check health with new server list
+    // Check health immediately
     checkHealth(updatedServers);
   };
 
@@ -80,6 +100,7 @@ function ServerList() {
     const updatedServers = servers.filter((s) => s.id !== serverId);
     await store.set("servers", updatedServers);
     setServers(updatedServers);
+    serversRef.current = updatedServers; // ✅ Update ref
     apiClient.removeServer(serverId);
   };
 

@@ -1,0 +1,4612 @@
+# Browser Farm
+
+A distributed browser automation platform for developers. Manage multiple browser contexts across multiple servers with live monitoring, manual control, and custom scripts.
+
+## Features
+
+- 🖥️ **Multi-Server Management** - Connect and manage multiple automation servers
+- 🌐 **Proxy Management** - Global proxy pool with per-site blacklisting
+- 👤 **Account Vault** - Centralized credential management for automation
+- 🤖 **Custom Scripts** - Write Python scripts using Playwright
+- 📺 **Live Screen Viewing** - Real-time browser screen streaming
+- 🎮 **Manual Control** - Take over any browser context with mouse/keyboard
+- 📸 **Screenshots & Videos** - Automatic capture and gallery viewing
+- 📊 **Resource Monitoring** - Memory, CPU, and network metrics per context
+- 🔄 **Auto-Restart** - Memory threshold monitoring with custom restart scripts
+
+## Architecture
+```
+Desktop App (Electron + React)
+    ↓ HTTP/WebSocket
+Server (Python + FastAPI + Playwright)
+    ↓ Xvfb (Virtual Display)
+Chromium Browser
+    ↓ Multiple Contexts
+Your Custom Scripts
+```
+
+## Installation
+
+### Server Setup
+
+1. **Install system dependencies:**
+```bash
+sudo apt update
+sudo apt install -y python3.11 python3-pip xvfb chromium-browser
+```
+
+2. **Install Browser Farm server:**
+```bash
+cd server
+pip install -r requirements.txt
+playwright install chromium
+```
+
+3. **Start the server:**
+```bash
+python -m browser_farm.server --host 0.0.0.0 --port 8080
+```
+
+Output:
+```
+✓ Xvfb started on :99
+✓ Chromium launched
+✓ Server running on http://192.168.1.100:8080
+✓ API Key: bf_abc123xyz789
+```
+
+### Client Setup
+
+**Option 1: Download Binary** (Recommended)
+- Download from [Releases](https://github.com/RebornBeat/browser-farm/releases)
+- Windows: `BrowserFarm-Setup.exe`
+- macOS: `BrowserFarm.dmg`
+- Linux: `BrowserFarm.AppImage`
+
+**Option 2: Build from Source**
+```bash
+cd client
+npm install
+npm run build
+npm run dist
+```
+
+## Quick Start
+
+1. **Launch the desktop app**
+
+2. **Add a server:**
+   - Click "Add Server" in the Servers tab
+   - Enter server URL: `http://192.168.1.100:8080`
+   - Enter API key: `bf_abc123xyz789`
+   - Click "Connect"
+
+3. **Add a proxy:**
+   - Go to Proxies tab
+   - Click "Add Proxy"
+   - Enter proxy details
+   - Save
+
+4. **Add an account:**
+   - Go to Accounts tab
+   - Click "Add Account"
+   - Enter credentials (stored locally, not encrypted)
+   - Save
+
+5. **Create a profile:**
+   - Go to Profiles tab
+   - Click "New Profile"
+   - Select server, proxy, and configure browser
+   - Attach your Python script
+   - Set memory threshold
+   - Click "Save & Start"
+
+6. **Monitor:**
+   - Go to Home to see live screens
+   - Click any screen to view details
+   - Click "Take Control" for manual operation
+
+## Writing Scripts
+
+Scripts are standard Python using Playwright. Reference accounts by ID.
+
+Example:
+```python
+from browser_farm import get_account
+import asyncio
+
+async def main(context):
+    # Get account credentials
+    account = get_account("acc_001")
+
+    page = await context.new_page()
+    await page.goto("https://instagram.com/accounts/login/")
+
+    # Login
+    await page.fill('input[name="username"]', account['username'])
+    await page.fill('input[name="password"]', account['password'])
+    await page.click('button[type="submit"]')
+
+    # Wait for success
+    await page.wait_for_url("https://instagram.com/")
+
+    # Your automation logic here
+    while True:
+        # Do something
+        await asyncio.sleep(3600)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## API Documentation
+
+See [API.md](./API.md) for full API reference.
+
+## System Requirements
+
+### Server
+- Ubuntu 20.04+ or Debian 11+
+- 4GB RAM minimum (8GB recommended)
+- 2 CPU cores minimum
+- 10GB disk space
+
+### Client
+- Windows 10+, macOS 11+, or Linux
+- 4GB RAM
+- 500MB disk space
+
+## Development
+
+### Server
+```bash
+cd server
+pip install -e .
+python -m browser_farm.server --dev
+```
+
+### Client
+```bash
+cd client
+npm install
+npm run dev
+```
+
+## License
+
+MIT License - see [LICENSE](./LICENSE)
+
+## Support
+
+- GitHub Issues: [Issues](https://github.com/yourusername/browser-farm/issues)
+- Discord: [Join Server](https://discord.gg/browserfarm)
+
+## Roadmap
+
+- [ ] Docker support
+- [ ] Kubernetes orchestration
+- [ ] Plugin system for custom integrations
+- [ ] Cloud proxy integration
+- [ ] Mobile app (iOS/Android)
+
+
+server/setup.py
+
+from setuptools import setup, find_packages
+
+setup(
+    name="browser-farm",
+    version="0.1.0",
+    packages=find_packages(where="src"),
+    install_requires=[
+        "fastapi>=0.109.0",
+        "uvicorn[standard]>=0.27.0",
+        "playwright>=1.41.0",
+        "psutil>=5.9.8",
+        "python-multipart>=0.0.6",
+        "python-dotenv>=1.0.0",
+        "pydantic>=2.5.3",
+        "pydantic-settings>=2.1.0",
+        "websockets>=12.0",
+        "aiofiles>=23.2.1",
+        "pillow>=10.2.0",
+    ],
+    package_dir={"": "src"},
+    include_package_data=True,
+    entry_points={
+        "console_scripts": [
+            "browser-farm=browser_farm.server:main"
+        ],
+    },
+)
+
+server/pyproject.toml
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "browser-farm"
+version = "0.1.0"
+description = "A distributed browser automation platform for developers. Manage multiple browser contexts across multiple servers with live monitoring, manual control, and custom scripts."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "playwright>=1.41.0",
+    "psutil>=5.9.8",
+    "python-multipart>=0.0.6",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.5.3",
+    "pydantic-settings>=2.1.0",
+    "websockets>=12.0",
+    "aiofiles>=23.2.1",
+    "pillow>=10.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/RebornBeat/Browser-Farm"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+server/MANIFEST.in
+
+include README.md
+include LICENSE
+
+server/src/xvfb_manager.py
+
+import subprocess
+import os
+import signal
+import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class XvfbManager:
+    def __init__(self, display=":99", resolution="1920x1080x24"):
+        self.display = display
+        self.resolution = resolution
+        self.process = None
+
+    def start(self):
+        """Start Xvfb virtual display"""
+        try:
+            # Check if Xvfb is already running
+            if self._is_running():
+                logger.info(f"Xvfb already running on {self.display}")
+                os.environ["DISPLAY"] = self.display
+                return
+
+            # Start Xvfb
+            cmd = [
+                "Xvfb",
+                self.display,
+                "-screen", "0", self.resolution,
+                "-ac",
+                "+extension", "GLX",
+                "+render",
+                "-noreset"
+            ]
+
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+
+            # Wait for Xvfb to be ready
+            time.sleep(2)
+
+            # Set DISPLAY environment variable
+            os.environ["DISPLAY"] = self.display
+
+            logger.info(f"✓ Xvfb started on {self.display}")
+
+        except Exception as e:
+            logger.error(f"Failed to start Xvfb: {e}")
+            raise
+
+    def _is_running(self):
+        """Check if Xvfb is already running"""
+        try:
+            subprocess.run(
+                ["xdpyinfo", "-display", self.display],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True
+            )
+            return True
+        except:
+            return False
+
+    def stop(self):
+        """Stop Xvfb"""
+        if self.process:
+            self.process.terminate()
+            self.process.wait(timeout=5)
+            logger.info("Xvfb stopped")
+
+server/src/vnc_handler.py
+
+import asyncio
+import logging
+from typing import Dict
+from playwright.async_api import Page
+
+logger = logging.getLogger(__name__)
+
+
+class VNCHandler:
+    def __init__(self, page: Page):
+        self.page = page
+
+    async def handle_mouse_move(self, x: int, y: int):
+        """Handle mouse move event"""
+        await self.page.mouse.move(x, y)
+
+    async def handle_mouse_click(self, x: int, y: int, button: str = "left"):
+        """Handle mouse click event"""
+        await self.page.mouse.click(x, y, button=button)
+
+    async def handle_keyboard(self, text: str):
+        """Handle keyboard input"""
+        await self.page.keyboard.type(text)
+
+    async def handle_scroll(self, delta_y: int):
+        """Handle scroll event"""
+        await self.page.mouse.wheel(0, delta_y)
+
+    async def process_action(self, action: Dict):
+        """Process a control action"""
+        action_type = action.get("type")
+
+        if action_type == "mouse_move":
+            await self.handle_mouse_move(action["x"], action["y"])
+
+        elif action_type == "mouse_click":
+            await self.handle_mouse_click(
+                action["x"],
+                action["y"],
+                action.get("button", "left")
+            )
+
+        elif action_type == "keyboard":
+            await self.handle_keyboard(action["text"])
+
+        elif action_type == "scroll":
+            await self.handle_scroll(action["delta_y"])
+
+server/src/utils.py
+
+import secrets
+import string
+import psutil
+import platform
+from pathlib import Path
+
+
+def generate_api_key() -> str:
+    """Generate a random API key"""
+    alphabet = string.ascii_letters + string.digits
+    return "bf_" + "".join(secrets.choice(alphabet) for _ in range(32))
+
+
+def get_system_info() -> dict:
+    """Get system information"""
+    return {
+        "platform": platform.system(),
+        "platform_version": platform.version(),
+        "architecture": platform.machine(),
+        "cpu_count": psutil.cpu_count(),
+        "memory_total": psutil.virtual_memory().total,
+    }
+
+
+def get_memory_usage() -> dict:
+    """Get current memory usage"""
+    mem = psutil.virtual_memory()
+    return {
+        "total_mb": int(mem.total / (1024 * 1024)),
+        "used_mb": int(mem.used / (1024 * 1024)),
+        "available_mb": int(mem.available / (1024 * 1024)),
+        "percent": mem.percent,
+    }
+
+
+def get_cpu_usage() -> float:
+    """Get current CPU usage percentage"""
+    return psutil.cpu_percent(interval=1)
+
+server/src/server.py
+
+import asyncio
+import logging
+import argparse
+import time
+from pathlib import Path
+from typing import Dict, List, Optional
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+
+from .models import (
+    Profile, ProfileCreate, ProfileStatus, ProfileMetrics,
+    ProxyConfig, Screenshot, Video, LogEntry, ServerHealth
+)
+from .context_manager import ContextManager
+from .xvfb_manager import XvfbManager
+from .vnc_handler import VNCHandler
+from .utils import generate_api_key, get_memory_usage, get_cpu_usage
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Global state
+API_KEY = generate_api_key()
+START_TIME = time.time()
+context_manager: Optional[ContextManager] = None
+xvfb: Optional[XvfbManager] = None
+profiles: Dict[str, Profile] = {}
+accounts_cache: Dict[str, Dict[str, dict]] = {}  # profile_id -> accounts
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown events"""
+    global context_manager, xvfb
+
+    # Startup
+    logger.info("Starting Browser Farm server...")
+
+    # Start Xvfb
+    xvfb = XvfbManager()
+    xvfb.start()
+
+    # Start context manager
+    data_dir = Path.home() / ".browser-farm" / "data"
+    context_manager = ContextManager(data_dir)
+    await context_manager.start()
+
+    logger.info(f"✓ Server running")
+    logger.info(f"✓ API Key: {API_KEY}")
+
+    yield
+
+    # Shutdown
+    logger.info("Shutting down...")
+    if context_manager:
+        await context_manager.stop()
+    if xvfb:
+        xvfb.stop()
+
+
+app = FastAPI(
+    title="Browser Farm",
+    description="Distributed browser automation platform",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def verify_api_key(x_api_key: Optional[str] = Header(None)):
+    """Verify API key"""
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+@app.get("/health", response_model=ServerHealth)
+async def health():
+    """Get server health"""
+    mem = get_memory_usage()
+    uptime = int(time.time() - START_TIME)
+
+    return ServerHealth(
+        status="online",
+        version="1.0.0",
+        max_contexts=20,
+        current_contexts=len(profiles),
+        memory_total_mb=mem["total_mb"],
+        memory_used_mb=mem["used_mb"],
+        memory_available_mb=mem["available_mb"],
+        cpu_usage=get_cpu_usage(),
+        uptime_seconds=uptime
+    )
+
+
+@app.post("/proxies")
+async def register_proxy(proxy: ProxyConfig, _=verify_api_key):
+    """Register a proxy"""
+    context_manager.register_proxy(proxy)
+    return {"status": "ok"}
+
+
+@app.get("/profiles")
+async def list_profiles(_=verify_api_key):
+    """List all profiles"""
+    result = []
+    for profile_id, profile in profiles.items():
+        metrics = context_manager.get_profile_metrics(profile_id) if profile_id in context_manager.contexts else {}
+
+        result.append({
+            "id": profile.id,
+            "name": profile.name,
+            "status": context_manager.get_profile_status(profile_id).value,
+            "proxy_id": profile.proxy_id,
+            "memory_mb": metrics.get("memory_mb", 0),
+            "cpu_percent": metrics.get("cpu_percent", 0),
+            "uptime_seconds": 0,  # TODO: track uptime
+            "last_screenshot": f"/screenshots/{profile_id}_latest.png",
+            "created_at": profile.created_at.isoformat()
+        })
+
+    return {"profiles": result}
+
+
+@app.post("/profiles")
+async def create_profile(data: ProfileCreate, _=verify_api_key):
+    """Create a new profile"""
+    profile_id = f"profile_{len(profiles) + 1:03d}"
+
+    profile = Profile(
+        id=profile_id,
+        name=data.name,
+        proxy_id=data.proxy_id,
+        user_agent=data.user_agent,
+        timezone=data.timezone,
+        locale=data.locale,
+        geolocation=data.geolocation,
+        script_code=data.script_code,
+        restart_script_code=data.restart_script_code,
+        memory_threshold_mb=data.memory_threshold_mb,
+        status=ProfileStatus.IDLE
+    )
+
+    profiles[profile_id] = profile
+
+    # Note: Accounts are provided when starting the profile
+    # For now, store empty dict
+    accounts_cache[profile_id] = {}
+
+    logger.info(f"Created profile {profile_id}")
+
+    return {"id": profile_id, "status": "created"}
+
+
+@app.get("/profiles/{profile_id}")
+async def get_profile(profile_id: str, _=verify_api_key):
+    """Get profile details"""
+    if profile_id not in profiles:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    profile = profiles[profile_id]
+    metrics = context_manager.get_profile_metrics(profile_id) if profile_id in context_manager.contexts else {}
+
+    return {
+        "id": profile.id,
+        "name": profile.name,
+        "status": context_manager.get_profile_status(profile_id).value,
+        "proxy_id": profile.proxy_id,
+        "user_agent": profile.user_agent,
+        "timezone": profile.timezone,
+        "locale": profile.locale,
+        "memory_mb": metrics.get("memory_mb", 0),
+        "cpu_percent": metrics.get("cpu_percent", 0),
+        "script_code": profile.script_code,
+        "memory_threshold_mb": profile.memory_threshold_mb,
+        "created_at": profile.created_at.isoformat()
+    }
+
+
+@app.post("/profiles/{profile_id}/start")
+async def start_profile(
+    profile_id: str,
+    accounts: Dict[str, dict],
+    _=verify_api_key
+):
+    """Start a profile"""
+    if profile_id not in profiles:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    profile = profiles[profile_id]
+    accounts_cache[profile_id] = accounts
+
+    # Create context if not exists
+    if profile_id not in context_manager.contexts:
+        await context_manager.create_profile(profile, accounts)
+
+    await context_manager.start_profile(profile_id)
+
+    return {"status": "started"}
+
+
+@app.post("/profiles/{profile_id}/pause")
+async def pause_profile(profile_id: str, _=verify_api_key):
+    """Pause a profile"""
+    if profile_id not in profiles:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    await context_manager.pause_profile(profile_id)
+    return {"status": "paused"}
+
+
+@app.post("/profiles/{profile_id}/stop")
+async def stop_profile(profile_id: str, _=verify_api_key):
+    """Stop a profile"""
+    if profile_id not in profiles:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    await context_manager.stop_profile(profile_id)
+    return {"status": "stopped"}
+
+
+@app.delete("/profiles/{profile_id}")
+async def delete_profile(profile_id: str, _=verify_api_key):
+    """Delete a profile"""
+    if profile_id not in profiles:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    # Stop if running
+    if profile_id in context_manager.contexts:
+        await context_manager.stop_profile(profile_id)
+
+    del profiles[profile_id]
+    if profile_id in accounts_cache:
+        del accounts_cache[profile_id]
+
+    return {"status": "deleted"}
+
+
+@app.get("/profiles/{profile_id}/screen")
+async def get_screen(profile_id: str, _=verify_api_key):
+    """Get live screenshot"""
+    if profile_id not in context_manager.contexts:
+        raise HTTPException(status_code=404, detail="Profile not running")
+
+    screenshot = await context_manager.get_screenshot(profile_id)
+
+    return StreamingResponse(
+        iter([screenshot]),
+        media_type="image/png"
+    )
+
+
+@app.websocket("/profiles/{profile_id}/stream")
+async def stream_screen(websocket: WebSocket, profile_id: str):
+    """Stream live screenshots via WebSocket"""
+    await websocket.accept()
+
+    try:
+        while True:
+            if profile_id not in context_manager.contexts:
+                await websocket.close()
+                break
+
+            screenshot = await context_manager.get_screenshot(profile_id)
+            await websocket.send_bytes(screenshot)
+
+            await asyncio.sleep(0.1)  # 10 FPS
+
+    except WebSocketDisconnect:
+        pass
+
+
+@app.websocket("/profiles/{profile_id}/control")
+async def control_screen(websocket: WebSocket, profile_id: str):
+    """Control browser via WebSocket"""
+    await websocket.accept()
+
+    if profile_id not in context_manager.contexts:
+        await websocket.close()
+        return
+
+    context = context_manager.contexts[profile_id]
+    pages = context.pages
+
+    if not pages:
+        await websocket.close()
+        return
+
+    page = pages[0]
+    handler = VNCHandler(page)
+
+    try:
+        while True:
+            message = await websocket.receive_json()
+            await handler.process_action(message)
+
+    except WebSocketDisconnect:
+        pass
+
+
+@app.post("/profiles/{profile_id}/screenshot")
+async def take_screenshot(profile_id: str, _=verify_api_key):
+    """Take and save screenshot"""
+    if profile_id not in context_manager.contexts:
+        raise HTTPException(status_code=404, detail="Profile not running")
+
+    filename = await context_manager.save_screenshot(profile_id)
+
+    return {
+        "id": filename.replace(".png", ""),
+        "url": f"/screenshots/{filename}"
+    }
+
+
+@app.get("/profiles/{profile_id}/screenshots")
+async def list_screenshots(profile_id: str, _=verify_api_key):
+    """List all screenshots for profile"""
+    screenshot_dir = context_manager.data_dir / "screenshots"
+    files = sorted(screenshot_dir.glob(f"{profile_id}_*.png"), reverse=True)
+
+    screenshots = []
+    for file in files:
+        screenshots.append({
+            "id": file.stem,
+            "timestamp": file.stat().st_mtime,
+            "url": f"/screenshots/{file.name}",
+            "size_bytes": file.stat().st_size
+        })
+
+    return {"screenshots": screenshots}
+
+
+@app.get("/screenshots/{filename}")
+async def get_screenshot(filename: str, _=verify_api_key):
+    """Get screenshot file"""
+    filepath = context_manager.data_dir / "screenshots" / filename
+
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+
+    return FileResponse(filepath)
+
+
+@app.get("/profiles/{profile_id}/metrics")
+async def get_metrics(profile_id: str, _=verify_api_key):
+    """Get profile metrics"""
+    if profile_id not in context_manager.contexts:
+        raise HTTPException(status_code=404, detail="Profile not running")
+
+    metrics = context_manager.get_profile_metrics(profile_id)
+
+    return metrics
+
+
+def main():
+    """Main entry point"""
+    parser = argparse.ArgumentParser(description="Browser Farm Server")
+    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
+    parser.add_argument("--port", default=8080, type=int, help="Port to bind to")
+    parser.add_argument("--dev", action="store_true", help="Development mode")
+
+    args = parser.parse_args()
+
+    import uvicorn
+    uvicorn.run(
+        "browser_farm.server:app",
+        host=args.host,
+        port=args.port,
+        reload=args.dev
+    )
+
+
+if __name__ == "__main__":
+    main()
+
+server/src/script_runner.py
+
+import asyncio
+import logging
+import json
+import os
+from pathlib import Path
+from typing import Dict, Optional
+from playwright.async_api import BrowserContext
+from .models import ProfileStatus
+
+logger = logging.getLogger(__name__)
+
+
+class ScriptRunner:
+    def __init__(
+        self,
+        profile_id: str,
+        context: BrowserContext,
+        script_code: str,
+        accounts: Dict[str, dict],
+        log_dir: Path
+    ):
+        self.profile_id = profile_id
+        self.context = context
+        self.script_code = script_code
+        self.accounts = accounts
+        self.log_dir = log_dir
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+        self.task: Optional[asyncio.Task] = None
+        self.status = ProfileStatus.IDLE
+
+        # Set up logging
+        self.log_file = self.log_dir / "script.log"
+        self.setup_logging()
+
+    def setup_logging(self):
+        """Set up logging for this script"""
+        file_handler = logging.FileHandler(self.log_file)
+        file_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+
+        script_logger = logging.getLogger(f"script.{self.profile_id}")
+        script_logger.addHandler(file_handler)
+        script_logger.setLevel(logging.INFO)
+
+    async def start(self):
+        """Start running the script"""
+        if self.task and not self.task.done():
+            logger.warning(f"Script {self.profile_id} already running")
+            return
+
+        self.status = ProfileStatus.RUNNING
+        self.task = asyncio.create_task(self._run())
+        logger.info(f"Started script {self.profile_id}")
+
+    async def pause(self):
+        """Pause the script"""
+        if self.task:
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+
+        self.status = ProfileStatus.PAUSED
+        logger.info(f"Paused script {self.profile_id}")
+
+    async def stop(self):
+        """Stop the script"""
+        if self.task:
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+
+        self.status = ProfileStatus.STOPPED
+        logger.info(f"Stopped script {self.profile_id}")
+
+    async def _run(self):
+        """Run the user's script"""
+        script_logger = logging.getLogger(f"script.{self.profile_id}")
+
+        try:
+            script_logger.info("Script started")
+
+            # Prepare environment
+            accounts_json = json.dumps(self.accounts)
+            os.environ["BROWSER_FARM_ACCOUNTS"] = accounts_json
+
+            # Execute script
+            # Create a namespace with context available
+            namespace = {
+                "context": self.context,
+                "asyncio": asyncio,
+                "__name__": "__main__",
+            }
+
+            # Execute the script code
+            exec(self.script_code, namespace)
+
+            # If script has a main function, run it
+            if "main" in namespace and callable(namespace["main"]):
+                await namespace["main"](self.context)
+
+            script_logger.info("Script completed")
+            self.status = ProfileStatus.IDLE
+
+        except asyncio.CancelledError:
+            script_logger.info("Script cancelled")
+            raise
+        except Exception as e:
+            script_logger.error(f"Script error: {e}", exc_info=True)
+            self.status = ProfileStatus.CRASHED
+            raise
+
+server/src/models.py
+
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+from enum import Enum
+
+
+class ProfileStatus(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    PAUSED = "paused"
+    STOPPED = "stopped"
+    CRASHED = "crashed"
+
+
+class ProxyConfig(BaseModel):
+    id: str
+    host: str
+    port: int
+    protocol: str = "http"
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+
+class Account(BaseModel):
+    """Account credentials for automation"""
+    id: str
+    platform: str
+    platform_url: Optional[str] = None
+    username: str
+    password: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    notes: Optional[str] = None
+    status: str = "active"
+    banned: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_used: Optional[datetime] = None
+
+
+class Geolocation(BaseModel):
+    lat: float
+    lng: float
+
+
+class Profile(BaseModel):
+    id: str
+    name: str
+    proxy_id: str
+    user_agent: Optional[str] = None
+    timezone: str = "America/New_York"
+    locale: str = "en-US"
+    geolocation: Optional[Geolocation] = None
+    script_code: str
+    restart_script_code: Optional[str] = None
+    memory_threshold_mb: int = 400
+    status: ProfileStatus = ProfileStatus.IDLE
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ProfileCreate(BaseModel):
+    name: str
+    proxy_id: str
+    user_agent: Optional[str] = None
+    timezone: str = "America/New_York"
+    locale: str = "en-US"
+    geolocation: Optional[Geolocation] = None
+    script_code: str
+    restart_script_code: Optional[str] = None
+    memory_threshold_mb: int = 400
+
+
+class ProfileMetrics(BaseModel):
+    memory_mb: int
+    memory_limit_mb: int
+    cpu_percent: float
+    uptime_seconds: int
+    network_rx_bytes: int = 0
+    network_tx_bytes: int = 0
+
+
+class Screenshot(BaseModel):
+    id: str
+    timestamp: datetime
+    url: str
+    size_bytes: int
+
+
+class Video(BaseModel):
+    id: str
+    timestamp: datetime
+    url: str
+    duration_seconds: int
+    size_bytes: int
+
+
+class LogEntry(BaseModel):
+    timestamp: datetime
+    level: str
+    message: str
+
+
+class ServerHealth(BaseModel):
+    status: str
+    version: str
+    max_contexts: int
+    current_contexts: int
+    memory_total_mb: int
+    memory_used_mb: int
+    memory_available_mb: int
+    cpu_usage: float
+    uptime_seconds: int
+
+server/src/memomory_monitor.py
+
+import asyncio
+import psutil
+import logging
+from typing import Callable, Optional
+from playwright.async_api import BrowserContext
+
+logger = logging.getLogger(__name__)
+
+
+class MemoryMonitor:
+    def __init__(
+        self,
+        profile_id: str,
+        context: BrowserContext,
+        threshold_mb: int,
+        on_threshold_exceeded: Callable
+    ):
+        self.profile_id = profile_id
+        self.context = context
+        self.threshold_mb = threshold_mb
+        self.on_threshold_exceeded = on_threshold_exceeded
+
+        self.task: Optional[asyncio.Task] = None
+        self.running = False
+
+        self.current_memory_mb = 0
+        self.cpu_percent = 0.0
+
+    def start(self):
+        """Start monitoring"""
+        if self.running:
+            return
+
+        self.running = True
+        self.task = asyncio.create_task(self._monitor())
+        logger.info(f"Started memory monitor for {self.profile_id}")
+
+    def stop(self):
+        """Stop monitoring"""
+        self.running = False
+        if self.task:
+            self.task.cancel()
+        logger.info(f"Stopped memory monitor for {self.profile_id}")
+
+    async def _monitor(self):
+        """Monitor memory usage"""
+        while self.running:
+            try:
+                # Get memory usage
+                memory_mb = await self._get_memory_usage()
+                self.current_memory_mb = memory_mb
+
+                # Get CPU usage
+                cpu = await self._get_cpu_usage()
+                self.cpu_percent = cpu
+
+                # Check threshold
+                if memory_mb > self.threshold_mb:
+                    logger.warning(
+                        f"Profile {self.profile_id} exceeded memory threshold: "
+                        f"{memory_mb}MB > {self.threshold_mb}MB"
+                    )
+                    self.on_threshold_exceeded()
+                    break
+
+                await asyncio.sleep(30)  # Check every 30 seconds
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in memory monitor: {e}")
+                await asyncio.sleep(30)
+
+    async def _get_memory_usage(self) -> int:
+        """Get memory usage in MB"""
+        try:
+            # Get browser process
+            pages = self.context.pages
+            if not pages:
+                return 0
+
+            # Get CDP session
+            page = pages[0]
+            client = await page.context.new_cdp_session(page)
+
+            # Get process info
+            result = await client.send("SystemInfo.getProcessInfo")
+
+            # Sum memory from all processes
+            total_memory = 0
+            for process in result.get("processInfo", []):
+                total_memory += process.get("cpuTime", 0)
+
+            # Fallback: use psutil
+            if total_memory == 0:
+                process = psutil.Process()
+                total_memory = process.memory_info().rss
+
+            return int(total_memory / (1024 * 1024))  # Convert to MB
+
+        except Exception as e:
+            logger.error(f"Error getting memory usage: {e}")
+            return 0
+
+    async def _get_cpu_usage(self) -> float:
+        """Get CPU usage percentage"""
+        try:
+            process = psutil.Process()
+            return process.cpu_percent(interval=1)
+        except:
+            return 0.0
+
+    def get_metrics(self) -> dict:
+        """Get current metrics"""
+        return {
+            "memory_mb": self.current_memory_mb,
+            "memory_limit_mb": self.threshold_mb,
+            "cpu_percent": self.cpu_percent,
+        }
+
+server/src/context_manager.py
+
+import asyncio
+import uuid
+import logging
+from pathlib import Path
+from typing import Dict, Optional
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+from .models import Profile, ProfileStatus, ProxyConfig
+from .script_runner import ScriptRunner
+from .memory_monitor import MemoryMonitor
+
+logger = logging.getLogger(__name__)
+
+
+class ContextManager:
+    def __init__(self, data_dir: Path):
+        self.data_dir = data_dir
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
+        self.browser: Optional[Browser] = None
+        self.playwright = None
+        self.contexts: Dict[str, BrowserContext] = {}
+        self.runners: Dict[str, ScriptRunner] = {}
+        self.monitors: Dict[str, MemoryMonitor] = {}
+        self.proxies: Dict[str, ProxyConfig] = {}
+
+        # Create directories
+        (self.data_dir / "screenshots").mkdir(exist_ok=True)
+        (self.data_dir / "videos").mkdir(exist_ok=True)
+        (self.data_dir / "logs").mkdir(exist_ok=True)
+
+    async def start(self):
+        """Start browser"""
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(
+            headless=False,  # Headful for real rendering
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+            ]
+        )
+        logger.info("✓ Chromium launched")
+
+    async def stop(self):
+        """Stop browser and all contexts"""
+        for profile_id in list(self.contexts.keys()):
+            await self.stop_profile(profile_id)
+
+        if self.browser:
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
+
+        logger.info("Browser stopped")
+
+    def register_proxy(self, proxy: ProxyConfig):
+        """Register a proxy for use"""
+        self.proxies[proxy.id] = proxy
+
+    async def create_profile(self, profile: Profile, accounts: Dict[str, dict]):
+        """Create and start a new browser context profile"""
+        if profile.id in self.contexts:
+            raise ValueError(f"Profile {profile.id} already exists")
+
+        # Get proxy
+        if profile.proxy_id not in self.proxies:
+            raise ValueError(f"Proxy {profile.proxy_id} not found")
+        proxy = self.proxies[profile.proxy_id]
+
+        # Create context
+        context = await self.browser.new_context(
+            proxy={
+                "server": f"{proxy.protocol}://{proxy.host}:{proxy.port}",
+                "username": proxy.username,
+                "password": proxy.password,
+            } if proxy.username else {
+                "server": f"{proxy.protocol}://{proxy.host}:{proxy.port}",
+            },
+            user_agent=profile.user_agent,
+            locale=profile.locale,
+            timezone_id=profile.timezone,
+            geolocation={"latitude": profile.geolocation.lat, "longitude": profile.geolocation.lng} if profile.geolocation else None,
+            permissions=["geolocation"] if profile.geolocation else [],
+            record_video_dir=str(self.data_dir / "videos" / profile.id) if True else None,
+            record_video_size={"width": 1920, "height": 1080},
+        )
+
+        self.contexts[profile.id] = context
+
+        # Create script runner
+        runner = ScriptRunner(
+            profile_id=profile.id,
+            context=context,
+            script_code=profile.script_code,
+            accounts=accounts,
+            log_dir=self.data_dir / "logs" / profile.id
+        )
+        self.runners[profile.id] = runner
+
+        # Create memory monitor
+        monitor = MemoryMonitor(
+            profile_id=profile.id,
+            context=context,
+            threshold_mb=profile.memory_threshold_mb,
+            on_threshold_exceeded=lambda: asyncio.create_task(self.restart_profile(profile.id, profile, accounts))
+        )
+        self.monitors[profile.id] = monitor
+
+        logger.info(f"Created profile {profile.id}")
+
+        return profile.id
+
+    async def start_profile(self, profile_id: str):
+        """Start running the profile's script"""
+        if profile_id not in self.runners:
+            raise ValueError(f"Profile {profile_id} not found")
+
+        runner = self.runners[profile_id]
+        await runner.start()
+
+        monitor = self.monitors[profile_id]
+        monitor.start()
+
+        logger.info(f"Started profile {profile_id}")
+
+    async def pause_profile(self, profile_id: str):
+        """Pause the profile's script"""
+        if profile_id not in self.runners:
+            raise ValueError(f"Profile {profile_id} not found")
+
+        runner = self.runners[profile_id]
+        await runner.pause()
+
+        logger.info(f"Paused profile {profile_id}")
+
+    async def stop_profile(self, profile_id: str):
+        """Stop and remove a profile"""
+        if profile_id not in self.contexts:
+            raise ValueError(f"Profile {profile_id} not found")
+
+        # Stop runner
+        if profile_id in self.runners:
+            await self.runners[profile_id].stop()
+            del self.runners[profile_id]
+
+        # Stop monitor
+        if profile_id in self.monitors:
+            self.monitors[profile_id].stop()
+            del self.monitors[profile_id]
+
+        # Close context
+        context = self.contexts[profile_id]
+        await context.close()
+        del self.contexts[profile_id]
+
+        logger.info(f"Stopped profile {profile_id}")
+
+    async def restart_profile(self, profile_id: str, profile: Profile, accounts: Dict[str, dict]):
+        """Restart a profile"""
+        logger.info(f"Restarting profile {profile_id}...")
+
+        # Stop
+        await self.stop_profile(profile_id)
+
+        # Start again
+        await self.create_profile(profile, accounts)
+        await self.start_profile(profile_id)
+
+        logger.info(f"Profile {profile_id} restarted")
+
+    async def get_screenshot(self, profile_id: str) -> bytes:
+        """Take screenshot of profile"""
+        if profile_id not in self.contexts:
+            raise ValueError(f"Profile {profile_id} not found")
+
+        context = self.contexts[profile_id]
+        pages = context.pages
+
+        if not pages:
+            raise ValueError("No pages open in context")
+
+        page = pages[0]
+        screenshot = await page.screenshot(full_page=False)
+
+        return screenshot
+
+    async def save_screenshot(self, profile_id: str) -> str:
+        """Save screenshot to disk"""
+        screenshot = await self.get_screenshot(profile_id)
+
+        timestamp = int(asyncio.get_event_loop().time())
+        filename = f"{profile_id}_{timestamp}.png"
+        filepath = self.data_dir / "screenshots" / filename
+
+        with open(filepath, "wb") as f:
+            f.write(screenshot)
+
+        return filename
+
+    def get_profile_status(self, profile_id: str) -> ProfileStatus:
+        """Get current status of profile"""
+        if profile_id not in self.runners:
+            return ProfileStatus.STOPPED
+
+        runner = self.runners[profile_id]
+        return runner.status
+
+    def get_profile_metrics(self, profile_id: str) -> dict:
+        """Get metrics for profile"""
+        if profile_id not in self.monitors:
+            return {}
+
+        monitor = self.monitors[profile_id]
+        return monitor.get_metrics()
+
+server/src/__init__.py
+
+"""Browser Farm - Distributed Browser Automation Platform"""
+
+__version__ = "1.0.0"
+
+from .models import Profile, ProxyConfig, Account
+
+__all__ = ["Profile", "ProxyConfig", "Account"]
+
+
+def get_account(account_id: str) -> dict:
+    """
+    Get account credentials at runtime.
+    This function is injected by the server when running user scripts.
+    """
+    import os
+    import json
+
+    accounts_json = os.environ.get("BROWSER_FARM_ACCOUNTS", "{}")
+    accounts = json.loads(accounts_json)
+
+    if account_id not in accounts:
+        raise ValueError(f"Account {account_id} not found")
+
+    return accounts[account_id]
+
+
+client/tailwind.config.js
+
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: ["./src/**/*.{js,jsx,ts,tsx}", "./public/index.html"],
+  theme: {
+    extend: {
+      colors: {
+        primary: {
+          50: "#f0f9ff",
+          100: "#e0f2fe",
+          200: "#bae6fd",
+          300: "#7dd3fc",
+          400: "#38bdf8",
+          500: "#0ea5e9",
+          600: "#0284c7",
+          700: "#0369a1",
+          800: "#075985",
+          900: "#0c4a6e",
+          950: "#082f49",
+        },
+        dark: {
+          50: "#f8fafc",
+          100: "#f1f5f9",
+          200: "#e2e8f0",
+          300: "#cbd5e1",
+          400: "#94a3b8",
+          500: "#64748b",
+          600: "#475569",
+          700: "#334155",
+          800: "#1e293b",
+          900: "#0f172a",
+          950: "#020617",
+        },
+        success: {
+          50: "#f0fdf4",
+          100: "#dcfce7",
+          200: "#bbf7d0",
+          300: "#86efac",
+          400: "#4ade80",
+          500: "#22c55e",
+          600: "#16a34a",
+          700: "#15803d",
+          800: "#166534",
+          900: "#14532d",
+          950: "#052e16",
+        },
+        warning: {
+          50: "#fefce8",
+          100: "#fef9c3",
+          200: "#fef08a",
+          300: "#fde047",
+          400: "#facc15",
+          500: "#eab308",
+          600: "#ca8a04",
+          700: "#a16207",
+          800: "#854d0e",
+          900: "#713f12",
+          950: "#422006",
+        },
+        error: {
+          50: "#fef2f2",
+          100: "#fee2e2",
+          200: "#fecaca",
+          300: "#fca5a5",
+          400: "#f87171",
+          500: "#ef4444",
+          600: "#dc2626",
+          700: "#b91c1c",
+          800: "#991b1b",
+          900: "#7f1d1d",
+          950: "#450a0a",
+        },
+      },
+      fontFamily: {
+        sans: ["Inter", "system-ui", "sans-serif"],
+        mono: ["JetBrains Mono", "Consolas", "monospace"],
+      },
+      animation: {
+        "fade-in": "fadeIn 0.5s ease-in-out",
+        "slide-in": "slideIn 0.3s ease-out",
+        "pulse-slow": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+        "spin-slow": "spin 3s linear infinite",
+      },
+      keyframes: {
+        fadeIn: {
+          "0%": { opacity: "0" },
+          "100%": { opacity: "1" },
+        },
+        slideIn: {
+          "0%": { transform: "translateY(-10px)", opacity: "0" },
+          "100%": { transform: "translateY(0)", opacity: "1" },
+        },
+      },
+      boxShadow: {
+        glow: "0 0 20px rgba(14, 165, 233, 0.5)",
+        "glow-lg": "0 0 40px rgba(14, 165, 233, 0.6)",
+      },
+    },
+  },
+  plugins: [require("@tailwindcss/forms")],
+};
+
+client/public/preload.js
+
+const { contextBridge, ipcRenderer } = require("electron");
+
+// Expose protected methods that allow the renderer process to use
+// the ipcRenderer without exposing the entire object
+contextBridge.exposeInMainWorld("electronStore", {
+  get: (key) => ipcRenderer.invoke("store-get", key),
+  set: (key, value) => ipcRenderer.invoke("store-set", key, value),
+  delete: (key) => ipcRenderer.invoke("store-delete", key),
+  clear: () => ipcRenderer.invoke("store-clear"),
+  has: (key) => ipcRenderer.invoke("store-has", key),
+  getAll: () => ipcRenderer.invoke("store-get-all"),
+});
+
+contextBridge.exposeInMainWorld("electronAPI", {
+  getAppPath: () => ipcRenderer.invoke("get-app-path"),
+});
+
+client/postcss.config.js
+
+module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+};
+
+client/package.json
+
+{
+  "name": "client",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "axios": "^1.13.2",
+    "electron-store": "^11.0.2",
+    "framer-motion": "^12.24.0",
+    "lucide-react": "^0.562.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "react-router-dom": "^7.11.0",
+    "react-scripts": "5.0.1",
+    "recharts": "^3.6.0"
+  },
+  "scripts": {
+    "start": "concurrently \"npm run react-start\" \"wait-on http://localhost:3000 && electron .\"",
+    "react-start": "craco start",
+    "react-build": "craco build",
+    "test": "craco test",
+    "build": "npm run react-build && electron-builder",
+    "dist": "npm run react-build && electron-builder --win --mac --linux",
+    "dist:win": "npm run react-build && electron-builder --win",
+    "dist:mac": "npm run react-build && electron-builder --mac",
+    "dist:linux": "npm run react-build && electron-builder --linux",
+    "dev": "concurrently \"npm run react-start\" \"wait-on http://localhost:3000 && electron . --dev\""
+  },
+  "main": "electron.js",
+  "homepage": "./",
+  "build": {
+    "appId": "com.browserfarm.client",
+    "productName": "Browser Farm",
+    "files": [
+      "build/**/*",
+      "electron.js",
+      "preload.js",
+      "node_modules/**/*"
+    ],
+    "directories": {
+      "buildResources": "public"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "public/icon.png"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "public/icon.png",
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "public/icon.png",
+      "category": "Development"
+    }
+  },
+  "eslintConfig": {
+    "extends": "react-app"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "@craco/craco": "^7.1.0",
+    "@tailwindcss/forms": "^0.5.11",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.2.1",
+    "electron-builder": "^26.0.12",
+    "electron": "^39.2.7",
+    "postcss": "^8.5.1",
+    "tailwindcss": "^3.4.17",
+    "tailwindcss-animate": "^1.0.7",
+    "wait-on": "^9.0.3"
+  }
+}
+
+client/public/electron.js
+
+const { app, BrowserWindow, ipcMain } = require("electron");
+const path = require("path");
+
+let Store;
+try {
+  Store = require("electron-store").default;
+} catch (e) {
+  Store = require("electron-store");
+}
+
+const isDev = process.argv.includes("--dev");
+
+// Disable sandbox on Linux for development
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("no-sandbox");
+}
+
+// Initialize electron-store
+const store = new Store({
+  defaults: {
+    servers: [],
+    proxies: [],
+    accounts: [],
+    profiles: [],
+    settings: {
+      homeScreenCount: 4,
+      homeScreens: [],
+    },
+  },
+});
+
+let mainWindow;
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    minWidth: 1200,
+    minHeight: 700,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
+      sandbox: false, // Disable sandbox
+    },
+    backgroundColor: "#0f172a",
+    show: false,
+    frame: true,
+    titleBarStyle: "default",
+  });
+
+  if (isDev) {
+    mainWindow.loadURL("http://localhost:3000");
+    mainWindow.webContents.openDevTools();
+  } else {
+    mainWindow.loadFile(path.join(__dirname, "build", "index.html"));
+  }
+
+  mainWindow.once("ready-to-show", () => {
+    mainWindow.show();
+  });
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+}
+
+// IPC Handlers for Store
+ipcMain.handle("store-get", (event, key) => {
+  return store.get(key);
+});
+
+ipcMain.handle("store-set", (event, key, value) => {
+  store.set(key, value);
+  return true;
+});
+
+ipcMain.handle("store-delete", (event, key) => {
+  store.delete(key);
+  return true;
+});
+
+ipcMain.handle("store-clear", () => {
+  store.clear();
+  return true;
+});
+
+ipcMain.handle("store-has", (event, key) => {
+  return store.has(key);
+});
+
+ipcMain.handle("store-get-all", () => {
+  return store.store;
+});
+
+ipcMain.handle("get-app-path", () => {
+  return app.getPath("userData");
+});
+
+app.whenReady().then(createWindow);
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});
+
+app.on("activate", () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createWindow();
+  }
+});
+
+client/craco.config.js
+
+module.exports = {
+  webpack: {
+    configure: (webpackConfig) => {
+      // Externalize electron and native modules
+      webpackConfig.externals = {
+        ...webpackConfig.externals,
+        electron: "commonjs electron",
+        "electron-store": "commonjs electron-store",
+      };
+
+      return webpackConfig;
+    },
+  },
+};
+
+client/craco
+
+client/src/theme.js
+
+export const theme = {
+  colors: {
+    background: "#0f172a",
+    surface: "#1e293b",
+    surfaceHover: "#334155",
+    border: "#334155",
+    text: {
+      primary: "#f8fafc",
+      secondary: "#cbd5e1",
+      muted: "#64748b",
+    },
+    status: {
+      running: "#22c55e",
+      paused: "#eab308",
+      stopped: "#ef4444",
+      idle: "#64748b",
+      online: "#22c55e",
+      offline: "#ef4444",
+    },
+    proxy: {
+      active: "#22c55e",
+      blacklisted: "#ef4444",
+    },
+  },
+  spacing: {
+    sidebar: "240px",
+    header: "64px",
+  },
+  borderRadius: {
+    sm: "4px",
+    md: "8px",
+    lg: "12px",
+    xl: "16px",
+  },
+};
+
+export default theme;
+
+client/src/index.js
+
+import React from "react";
+import ReactDOM from "react-dom/client";
+import "./index.css";
+import App from "./App";
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+);
+
+client/src/index.css
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    * {
+        @apply border-dark-700;
+    }
+
+    body {
+        @apply bg-dark-950 text-dark-50;
+        font-family:
+            "Inter",
+            system-ui,
+            -apple-system,
+            sans-serif;
+        margin: 0;
+        padding: 0;
+    }
+
+    ::-webkit-scrollbar {
+        @apply w-2 h-2;
+    }
+
+    ::-webkit-scrollbar-track {
+        @apply bg-dark-900;
+    }
+
+    ::-webkit-scrollbar-thumb {
+        @apply bg-dark-700 rounded;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+        @apply bg-dark-600;
+    }
+}
+
+@layer components {
+    .btn {
+        @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 inline-flex items-center justify-center;
+    }
+
+    .btn-primary {
+        @apply bg-primary-600 text-white;
+    }
+
+    .btn-primary:hover {
+        @apply bg-primary-700;
+    }
+
+    .btn-secondary {
+        @apply bg-dark-700 text-dark-100;
+    }
+
+    .btn-secondary:hover {
+        @apply bg-dark-600;
+    }
+
+    .btn-success {
+        @apply bg-success-600 text-white;
+    }
+
+    .btn-success:hover {
+        @apply bg-success-700;
+    }
+
+    .btn-error {
+        @apply bg-error-600 text-white;
+    }
+
+    .btn-error:hover {
+        @apply bg-error-700;
+    }
+
+    .input {
+        @apply bg-dark-800 border border-dark-700 rounded-lg px-4 py-2 text-dark-50
+           focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent w-full;
+    }
+
+    .card {
+        @apply bg-dark-800 rounded-lg border border-dark-700 p-6;
+    }
+
+    .status-badge {
+        @apply px-3 py-1 rounded-full text-xs font-medium inline-block;
+    }
+
+    .status-running {
+        @apply bg-success-500/20 text-success-500;
+    }
+
+    .status-paused {
+        @apply bg-warning-500/20 text-warning-500;
+    }
+
+    .status-stopped {
+        @apply bg-error-500/20 text-error-500;
+    }
+
+    .status-idle {
+        @apply bg-dark-600/50 text-dark-400;
+    }
+}
+
+client/src/App.js
+
+import React, { useState, useEffect } from "react";
+import {
+  BrowserRouter as Router,
+  Routes,
+  Route,
+  Navigate,
+} from "react-router-dom";
+import Startup from "./components/Startup";
+import Sidebar from "./components/Sidebar";
+import Header from "./components/Header";
+import Home from "./pages/Home";
+import Servers from "./pages/Servers";
+import Proxies from "./pages/Proxies";
+import Accounts from "./pages/Accounts";
+import Profiles from "./pages/Profiles";
+import Monitoring from "./pages/Monitoring";
+
+function App() {
+  const [showStartup, setShowStartup] = useState(true);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // Show startup animation for 3 seconds
+    setTimeout(() => {
+      setShowStartup(false);
+      setLoading(false);
+    }, 3000);
+  }, []);
+
+  if (showStartup) {
+    return <Startup />;
+  }
+
+  return (
+    <Router>
+      <div className="flex h-screen bg-dark-950 overflow-hidden">
+        <Sidebar />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <Header />
+          <main className="flex-1 overflow-auto p-6">
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/servers" element={<Servers />} />
+              <Route path="/proxies" element={<Proxies />} />
+              <Route path="/accounts" element={<Accounts />} />
+              <Route path="/profiles" element={<Profiles />} />
+              <Route path="/monitoring/:profileId" element={<Monitoring />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </main>
+        </div>
+      </div>
+    </Router>
+  );
+}
+
+export default App;
+
+client/src/store/db.js
+
+/**
+ * Store wrapper that uses Electron IPC to communicate with electron-store
+ * Falls back to localStorage in browser/development mode
+ */
+
+class Store {
+  constructor() {
+    // Check if running in Electron
+    this.isElectron = window.electronStore !== undefined;
+
+    if (!this.isElectron) {
+      // Fallback to localStorage for development without Electron
+      this.localData = this.loadFromLocalStorage();
+    }
+  }
+
+  loadFromLocalStorage() {
+    try {
+      const stored = localStorage.getItem("browser_farm_data");
+      return stored ? JSON.parse(stored) : this.getDefaultData();
+    } catch (error) {
+      console.error("Failed to load from localStorage:", error);
+      return this.getDefaultData();
+    }
+  }
+
+  saveToLocalStorage() {
+    try {
+      localStorage.setItem("browser_farm_data", JSON.stringify(this.localData));
+    } catch (error) {
+      console.error("Failed to save to localStorage:", error);
+    }
+  }
+
+  getDefaultData() {
+    return {
+      servers: [],
+      proxies: [],
+      accounts: [],
+      profiles: [],
+      settings: {
+        homeScreenCount: 4,
+        homeScreens: [],
+      },
+    };
+  }
+
+  async get(key) {
+    if (this.isElectron) {
+      return await window.electronStore.get(key);
+    } else {
+      return this.localData[key];
+    }
+  }
+
+  async set(key, value) {
+    if (this.isElectron) {
+      await window.electronStore.set(key, value);
+    } else {
+      this.localData[key] = value;
+      this.saveToLocalStorage();
+    }
+  }
+
+  async delete(key) {
+    if (this.isElectron) {
+      await window.electronStore.delete(key);
+    } else {
+      delete this.localData[key];
+      this.saveToLocalStorage();
+    }
+  }
+
+  async clear() {
+    if (this.isElectron) {
+      await window.electronStore.clear();
+    } else {
+      this.localData = this.getDefaultData();
+      this.saveToLocalStorage();
+    }
+  }
+
+  async has(key) {
+    if (this.isElectron) {
+      return await window.electronStore.has(key);
+    } else {
+      return this.localData.hasOwnProperty(key);
+    }
+  }
+
+  async getAll() {
+    if (this.isElectron) {
+      return await window.electronStore.getAll();
+    } else {
+      return this.localData;
+    }
+  }
+}
+
+const store = new Store();
+export default store;
+
+client/src/pages/Servers.jsx
+
+import React from "react";
+import ServerList from "../components/ServerList";
+
+function Servers() {
+  return (
+    <div className="animate-fade-in">
+      <ServerList />
+    </div>
+  );
+}
+
+export default Servers;
+
+client/src/pages/Proxies.jsx
+
+import React from "react";
+import ProxyManager from "../components/ProxyManager";
+
+function Proxies() {
+  return (
+    <div className="animate-fade-in">
+      <ProxyManager />
+    </div>
+  );
+}
+
+export default Proxies;
+
+client/src/pages/Profiles.jsx
+
+import React from "react";
+import ProfileManager from "../components/ProfileManager";
+
+function Profiles() {
+  return (
+    <div className="animate-fade-in">
+      <ProfileManager />
+    </div>
+  );
+}
+
+export default Profiles;
+
+client/src/pages/Monitoring.jsx
+
+import React, { useState, useEffect, useRef } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import {
+  ArrowLeft,
+  Download,
+  Play,
+  Pause,
+  Square,
+  Maximize2,
+} from "lucide-react";
+import { apiClient } from "../api/client";
+import store from "../store/db";
+
+function Monitoring() {
+  const { profileId } = useParams();
+  const navigate = useNavigate();
+  const [profile, setProfile] = useState(null);
+  const [screenshot, setScreenshot] = useState(null);
+  const [screenshots, setScreenshots] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [metrics, setMetrics] = useState(null);
+  const [manualControl, setManualControl] = useState(false);
+  const wsRef = useRef(null);
+  const controlWsRef = useRef(null);
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    loadProfile();
+    const interval = setInterval(loadData, 2000);
+    return () => clearInterval(interval);
+  }, [profileId]);
+
+  useEffect(() => {
+    if (manualControl) {
+      startManualControl();
+    } else {
+      stopManualControl();
+    }
+    return () => stopManualControl();
+  }, [manualControl]);
+
+  const loadProfile = () => {
+    const profiles = store.get("profiles") || [];
+    const p = profiles.find((p) => p.id === profileId);
+    setProfile(p);
+  };
+
+  const loadData = async () => {
+    if (!profile) return;
+
+    try {
+      // Load screenshot
+      const screenshotUrl = await apiClient.getScreenshot(
+        profile.serverId,
+        profile.id,
+      );
+      setScreenshot(screenshotUrl);
+
+      // Load metrics
+      const metricsData = await apiClient.getMetrics(
+        profile.serverId,
+        profile.id,
+      );
+      setMetrics(metricsData);
+
+      // Load screenshots list
+      const screenshotsList = await apiClient.listScreenshots(
+        profile.serverId,
+        profile.id,
+      );
+      setScreenshots(screenshotsList);
+    } catch (error) {
+      console.error("Failed to load data:", error);
+    }
+  };
+
+  const startManualControl = () => {
+    if (!profile) return;
+
+    const url = apiClient.getControlUrl(profile.serverId, profile.id);
+    controlWsRef.current = new WebSocket(url);
+
+    controlWsRef.current.onopen = () => {
+      console.log("Manual control connected");
+    };
+
+    controlWsRef.current.onerror = (error) => {
+      console.error("Control WebSocket error:", error);
+      setManualControl(false);
+    };
+  };
+
+  const stopManualControl = () => {
+    if (controlWsRef.current) {
+      controlWsRef.current.close();
+      controlWsRef.current = null;
+    }
+  };
+
+  const sendControlAction = (action) => {
+    if (
+      controlWsRef.current &&
+      controlWsRef.current.readyState === WebSocket.OPEN
+    ) {
+      controlWsRef.current.send(JSON.stringify(action));
+    }
+  };
+
+  const handleMouseMove = (e) => {
+    if (!manualControl || !canvasRef.current) return;
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (1920 / rect.width);
+    const y = (e.clientY - rect.top) * (1080 / rect.height);
+
+    sendControlAction({ type: "mouse_move", x, y });
+  };
+
+  const handleClick = (e) => {
+    if (!manualControl || !canvasRef.current) return;
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (1920 / rect.width);
+    const y = (e.clientY - rect.top) * (1080 / rect.height);
+
+    sendControlAction({ type: "mouse_click", x, y, button: "left" });
+  };
+
+  const handleKeyPress = (e) => {
+    if (!manualControl) return;
+    sendControlAction({ type: "keyboard", text: e.key });
+  };
+
+  const takeScreenshot = async () => {
+    try {
+      await apiClient.takeScreenshot(profile.serverId, profile.id);
+      loadData();
+      alert("Screenshot saved!");
+    } catch (error) {
+      alert("Failed to take screenshot: " + error.message);
+    }
+  };
+
+  const downloadScreenshot = (url) => {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `screenshot_${Date.now()}.png`;
+    link.click();
+  };
+
+  if (!profile) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <p className="text-dark-400">Profile not found</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="animate-fade-in">
+      <div className="flex items-center mb-6">
+        <button onClick={() => navigate(-1)} className="btn btn-secondary mr-4">
+          <ArrowLeft className="w-4 h-4" />
+        </button>
+
+        <div className="flex-1">
+          <h1 className="text-2xl font-bold text-white">{profile.name}</h1>
+          <p className="text-dark-400">Profile ID: {profile.id}</p>
+        </div>
+
+        <div className="flex items-center space-x-3">
+          <span className={`status-badge status-${profile.status}`}>
+            {profile.status}
+          </span>
+          <button onClick={takeScreenshot} className="btn btn-primary">
+            <Download className="w-4 h-4 mr-2" />
+            Screenshot
+          </button>
+          <button
+            onClick={() => setManualControl(!manualControl)}
+            className={`btn ${manualControl ? "btn-error" : "btn-success"}`}
+          >
+            {manualControl ? "Release Control" : "Take Control"}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-6">
+        {/* Main Screen */}
+        <div className="col-span-2 space-y-6">
+          <div className="card">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-white">Live Screen</h3>
+              {manualControl && (
+                <span className="text-sm text-success-500 animate-pulse">
+                  ● Manual Control Active
+                </span>
+              )}
+            </div>
+
+            <div
+              ref={canvasRef}
+              className={`relative aspect-video bg-dark-900 rounded-lg overflow-hidden ${
+                manualControl ? "cursor-none" : ""
+              }`}
+              onMouseMove={handleMouseMove}
+              onClick={handleClick}
+              onKeyDown={handleKeyPress}
+              tabIndex={manualControl ? 0 : -1}
+            >
+              {screenshot ? (
+                <img
+                  src={screenshot}
+                  alt="Live screen"
+                  className="w-full h-full object-contain"
+                />
+              ) : (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <div className="animate-spin w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full mx-auto mb-2"></div>
+                    <p className="text-sm text-dark-400">Loading...</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Screenshots Gallery */}
+          <div className="card">
+            <h3 className="font-semibold text-white mb-4">Screenshots</h3>
+
+            <div className="grid grid-cols-4 gap-3">
+              {screenshots.slice(0, 8).map((ss) => (
+                <div key={ss.id} className="relative group">
+                  <img
+                    src={ss.url}
+                    alt="Screenshot"
+                    className="w-full aspect-video object-cover rounded-lg cursor-pointer"
+                    onClick={() => setScreenshot(ss.url)}
+                  />
+                  <button
+                    onClick={() => downloadScreenshot(ss.url)}
+                    className="absolute top-2 right-2 p-1 bg-dark-900/80 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Download className="w-4 h-4 text-white" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Sidebar */}
+        <div className="space-y-6">
+          {/* Metrics */}
+          {metrics && (
+            <div className="card">
+              <h3 className="font-semibold text-white mb-4">Metrics</h3>
+
+              <div className="space-y-4">
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-dark-400">Memory</span>
+                    <span className="text-white">
+                      {metrics.memory_mb}MB / {metrics.memory_limit_mb}MB
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-dark-700 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary-500 transition-all"
+                      style={{
+                        width: `${(metrics.memory_mb / metrics.memory_limit_mb) * 100}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-dark-400">CPU</span>
+                    <span className="text-white">
+                      {metrics.cpu_percent?.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-dark-700 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-success-500 transition-all"
+                      style={{ width: `${metrics.cpu_percent}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Logs */}
+          <div className="card">
+            <h3 className="font-semibold text-white mb-4">Logs</h3>
+
+            <div className="space-y-2 max-h-96 overflow-y-auto font-mono text-xs">
+              {logs.length === 0 ? (
+                <p className="text-dark-500">No logs yet</p>
+              ) : (
+                logs.map((log, i) => (
+                  <div key={i} className="text-dark-300">
+                    <span className="text-dark-500">{log.timestamp}</span>{" "}
+                    <span
+                      className={`${
+                        log.level === "error"
+                          ? "text-error-500"
+                          : log.level === "warning"
+                            ? "text-warning-500"
+                            : "text-dark-300"
+                      }`}
+                    >
+                      {log.message}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default Monitoring;
+
+client/src/pages/Home.jsx
+
+import React, { useState, useEffect } from "react";
+import { Settings } from "lucide-react";
+import LiveScreenGrid from "../components/LiveScreenGrid";
+import store from "../store/db";
+
+function Home() {
+  const [screens, setScreens] = useState([]);
+  const [screenCount, setScreenCount] = useState(4);
+  const [showSettings, setShowSettings] = useState(false);
+  const [profiles, setProfiles] = useState([]);
+
+  useEffect(() => {
+    loadSettings();
+    loadProfiles();
+  }, []);
+
+  const loadSettings = async () => {
+    const settings = (await store.get("settings")) || {};
+    setScreenCount(settings.homeScreenCount || 4);
+    setScreens(settings.homeScreens || []);
+  };
+
+  const loadProfiles = async () => {
+    const storedProfiles = (await store.get("profiles")) || [];
+    setProfiles(storedProfiles.filter((p) => p.status === "running"));
+  };
+
+  const saveSettings = async () => {
+    const settings = (await store.get("settings")) || {};
+    settings.homeScreenCount = screenCount;
+    settings.homeScreens = screens;
+    await store.set("settings", settings);
+    setShowSettings(false);
+  };
+
+  const addScreen = (profileId) => {
+    const profile = profiles.find((p) => p.id === profileId);
+    if (!profile || screens.some((s) => s.profileId === profileId)) return;
+
+    const newScreen = {
+      serverId: profile.serverId,
+      profileId: profile.id,
+      profileName: profile.name,
+    };
+
+    const updatedScreens = [...screens, newScreen];
+    setScreens(updatedScreens);
+  };
+
+  const removeScreen = (profileId) => {
+    const updatedScreens = screens.filter((s) => s.profileId !== profileId);
+    setScreens(updatedScreens);
+  };
+
+  const hasEnoughProfiles = profiles.length >= screenCount;
+
+  return (
+    <div className="animate-fade-in">
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <h1 className="text-3xl font-bold text-white mb-2">Home</h1>
+          <p className="text-dark-400">Monitor your live browser contexts</p>
+        </div>
+
+        <button
+          onClick={() => setShowSettings(true)}
+          className="btn btn-secondary flex items-center"
+        >
+          <Settings className="w-4 h-4 mr-2" />
+          Configure Screens
+        </button>
+      </div>
+
+      {screens.length === 0 ? (
+        <div className="card text-center py-16">
+          <h3 className="text-xl font-semibold text-white mb-2">
+            No screens configured
+          </h3>
+          <p className="text-dark-400 mb-6">
+            {profiles.length === 0
+              ? "Launch a profile to view live screens"
+              : 'Click "Configure Screens" to select which profiles to display'}
+          </p>
+          {profiles.length > 0 && (
+            <button
+              onClick={() => setShowSettings(true)}
+              className="btn btn-primary"
+            >
+              Configure Screens
+            </button>
+          )}
+        </div>
+      ) : (
+        <LiveScreenGrid screens={screens} />
+      )}
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-dark-800 rounded-lg p-6 w-full max-w-2xl">
+            <h3 className="text-xl font-bold text-white mb-4">
+              Configure Home Screens
+            </h3>
+
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Number of screens to display (minimum 4)
+                </label>
+                <input
+                  type="number"
+                  min="4"
+                  max="12"
+                  className="input w-full"
+                  value={screenCount}
+                  onChange={(e) => setScreenCount(parseInt(e.target.value))}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Select profiles to display ({screens.length}/{screenCount})
+                </label>
+
+                {profiles.length === 0 ? (
+                  <p className="text-dark-500 text-sm">
+                    No running profiles available
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {profiles.map((profile) => {
+                      const isSelected = screens.some(
+                        (s) => s.profileId === profile.id,
+                      );
+                      const canAdd = screens.length < screenCount;
+
+                      return (
+                        <div
+                          key={profile.id}
+                          className="flex items-center justify-between p-3 bg-dark-900 rounded-lg"
+                        >
+                          <div>
+                            <p className="text-white font-medium">
+                              {profile.name}
+                            </p>
+                            <p className="text-sm text-dark-400">
+                              {profile.id}
+                            </p>
+                          </div>
+
+                          {isSelected ? (
+                            <button
+                              onClick={() => removeScreen(profile.id)}
+                              className="btn btn-error btn-sm"
+                            >
+                              Remove
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => addScreen(profile.id)}
+                              className="btn btn-primary btn-sm"
+                              disabled={!canAdd}
+                            >
+                              {canAdd ? "Add" : "Full"}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {screens.length < screenCount && profiles.length > 0 && (
+                <p className="text-sm text-warning-500">
+                  ⚠️ You have fewer screens selected than the minimum (
+                  {screens.length}/{screenCount})
+                </p>
+              )}
+            </div>
+
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => setShowSettings(false)}
+                className="btn btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button onClick={saveSettings} className="btn btn-primary flex-1">
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default Home;
+
+client/src/pages/Accounts.jsx
+
+import React from "react";
+import AccountVault from "../components/AccountVault";
+
+function Accounts() {
+  return (
+    <div className="animate-fade-in">
+      <AccountVault />
+    </div>
+  );
+}
+
+export default Accounts;
+
+client/src/components/Startup.jsx
+
+import React from "react";
+import { motion } from "framer-motion";
+import { Activity } from "lucide-react";
+
+function Startup() {
+  return (
+    <div className="h-screen w-screen bg-gradient-to-br from-dark-950 via-dark-900 to-primary-950 flex items-center justify-center">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.5 }}
+        className="text-center"
+      >
+        {/* Logo */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2, duration: 0.5 }}
+          className="mb-8"
+        >
+          <div className="inline-flex items-center justify-center w-24 h-24 bg-primary-600 rounded-2xl shadow-glow-lg mb-4">
+            <Activity className="w-12 h-12 text-white" />
+          </div>
+        </motion.div>
+
+        {/* Title */}
+        <motion.h1
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4, duration: 0.5 }}
+          className="text-5xl font-bold text-white mb-4"
+        >
+          Browser Farm
+        </motion.h1>
+
+        {/* Subtitle */}
+        <motion.p
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.6, duration: 0.5 }}
+          className="text-xl text-dark-300 mb-12"
+        >
+          Distributed Browser Automation Platform
+        </motion.p>
+
+        {/* Loading Animation */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.8, duration: 0.5 }}
+          className="flex items-center justify-center space-x-2"
+        >
+          <div
+            className="w-3 h-3 bg-primary-500 rounded-full animate-pulse"
+            style={{ animationDelay: "0ms" }}
+          ></div>
+          <div
+            className="w-3 h-3 bg-primary-500 rounded-full animate-pulse"
+            style={{ animationDelay: "150ms" }}
+          ></div>
+          <div
+            className="w-3 h-3 bg-primary-500 rounded-full animate-pulse"
+            style={{ animationDelay: "300ms" }}
+          ></div>
+        </motion.div>
+
+        {/* Version */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1.2, duration: 0.5 }}
+          className="mt-12 text-dark-500 text-sm"
+        >
+          Version 1.0.0
+        </motion.div>
+      </motion.div>
+    </div>
+  );
+}
+
+export default Startup;
+
+client/src/components/Sidebar.jsx
+
+import React from "react";
+import { Link, useLocation } from "react-router-dom";
+import { Home, Server, Globe, Users, Layout, Activity } from "lucide-react";
+
+const menuItems = [
+  { path: "/", icon: Home, label: "Home" },
+  { path: "/servers", icon: Server, label: "Servers" },
+  { path: "/proxies", icon: Globe, label: "Proxies" },
+  { path: "/accounts", icon: Users, label: "Accounts" },
+  { path: "/profiles", icon: Layout, label: "Profiles" },
+];
+
+function Sidebar() {
+  const location = useLocation();
+
+  return (
+    <div className="w-60 bg-dark-900 border-r border-dark-700 flex flex-col">
+      {/* Logo */}
+      <div className="h-16 flex items-center px-6 border-b border-dark-700">
+        <Activity className="w-8 h-8 text-primary-500 mr-3" />
+        <span className="text-xl font-bold text-white">Browser Farm</span>
+      </div>
+
+      {/* Menu */}
+      <nav className="flex-1 py-6">
+        {menuItems.map((item) => {
+          const Icon = item.icon;
+          const isActive = location.pathname === item.path;
+
+          return (
+            <Link
+              key={item.path}
+              to={item.path}
+              className={`
+                flex items-center px-6 py-3 mb-1 transition-colors duration-200
+                ${
+                  isActive
+                    ? "bg-primary-600 text-white border-l-4 border-primary-400"
+                    : "text-dark-300 hover:bg-dark-800 hover:text-white"
+                }
+              `}
+            >
+              <Icon className="w-5 h-5 mr-3" />
+              <span className="font-medium">{item.label}</span>
+            </Link>
+          );
+        })}
+      </nav>
+
+      {/* Footer */}
+      <div className="p-4 border-t border-dark-700">
+        <div className="text-xs text-dark-500 text-center">v1.0.0</div>
+      </div>
+    </div>
+  );
+}
+
+export default Sidebar;
+
+client/src/components/ServerList.jsx
+
+import React, { useState, useEffect, useRef } from "react";
+import { Plus, Server, Trash2, CheckCircle, XCircle } from "lucide-react";
+import store from "../store/db";
+import { apiClient } from "../api/client";
+
+function ServerList() {
+  const [servers, setServers] = useState([]);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [newServer, setNewServer] = useState({
+    name: "",
+    url: "",
+    apiKey: "",
+  });
+  const [serverHealth, setServerHealth] = useState({});
+
+  // ✅ USE REF TO TRACK CURRENT SERVERS
+  const serversRef = useRef([]);
+
+  useEffect(() => {
+    loadServers();
+
+    // ✅ HEALTH CHECK INTERVAL THAT USES REF
+    const interval = setInterval(() => {
+      console.log('⏰ Health check interval triggered');
+      checkHealth(serversRef.current);  // Use ref instead of state
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // ✅ UPDATE REF WHENEVER SERVERS CHANGE
+  useEffect(() => {
+    serversRef.current = servers;
+  }, [servers]);
+
+  const loadServers = async () => {
+    const storedServers = (await store.get("servers")) || [];
+    setServers(storedServers);
+    serversRef.current = storedServers;  // ✅ Update ref immediately
+
+    // Add servers to API client
+    storedServers.forEach((server) => {
+      apiClient.addServer(server.id, server.url, server.apiKey);
+    });
+
+    // Initial health check
+    checkHealth(storedServers);
+  };
+
+  const checkHealth = async (serversToCheck) => {
+    if (!serversToCheck || serversToCheck.length === 0) {
+      console.log('⚠️ No servers to check');
+      return;
+    }
+
+    const health = {};
+
+    console.log(`🔍 Checking health for ${serversToCheck.length} server(s)`);
+
+    for (const server of serversToCheck) {
+      console.log(`📡 Pinging ${server.name} at ${server.url}`);
+      try {
+        const data = await apiClient.getHealth(server.id);
+        console.log(`✅ ${server.name} is ONLINE`);
+        health[server.id] = { status: "online", ...data };
+      } catch (error) {
+        console.error(`❌ ${server.name} is OFFLINE:`, error.message);
+        health[server.id] = { status: "offline" };
+      }
+    }
+
+    console.log('📊 Health check complete:', health);
+    setServerHealth(health);
+  };
+
+  const addServer = async () => {
+    const server = {
+      id: `server_${Date.now()}`,
+      ...newServer,
+      createdAt: new Date().toISOString(),
+    };
+
+    const updatedServers = [...servers, server];
+    await store.set("servers", updatedServers);
+    setServers(updatedServers);
+    serversRef.current = updatedServers;  // ✅ Update ref
+
+    apiClient.addServer(server.id, server.url, server.apiKey);
+
+    setShowAddModal(false);
+    setNewServer({ name: "", url: "", apiKey: "" });
+
+    // Check health immediately
+    checkHealth(updatedServers);
+  };
+
+  const deleteServer = async (serverId) => {
+    if (!window.confirm("Are you sure you want to delete this server?")) return;
+
+    const updatedServers = servers.filter((s) => s.id !== serverId);
+    await store.set("servers", updatedServers);
+    setServers(updatedServers);
+    serversRef.current = updatedServers;  // ✅ Update ref
+    apiClient.removeServer(serverId);
+  };
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold text-white">Servers</h2>
+        <button
+          onClick={() => setShowAddModal(true)}
+          className="btn btn-primary flex items-center"
+        >
+          <Plus className="w-4 h-4 mr-2" />
+          Add Server
+        </button>
+      </div>
+
+      <div className="grid gap-4">
+        {servers.map((server) => {
+          const health = serverHealth[server.id];
+          const isOnline = health?.status === "online";
+
+          return (
+            <div
+              key={server.id}
+              className="card flex items-center justify-between"
+            >
+              <div className="flex items-center space-x-4">
+                <div
+                  className={`w-12 h-12 rounded-lg flex items-center justify-center ${
+                    isOnline ? "bg-success-500/20" : "bg-error-500/20"
+                  }`}
+                >
+                  <Server
+                    className={`w-6 h-6 ${
+                      isOnline ? "text-success-500" : "text-error-500"
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-semibold text-white flex items-center">
+                    {server.name}
+                    {isOnline ? (
+                      <CheckCircle className="w-4 h-4 text-success-500 ml-2" />
+                    ) : (
+                      <XCircle className="w-4 h-4 text-error-500 ml-2" />
+                    )}
+                  </h3>
+                  <p className="text-sm text-dark-400">{server.url}</p>
+                </div>
+              </div>
+
+              {health && isOnline && (
+                <div className="flex items-center space-x-6 text-sm">
+                  <div>
+                    <p className="text-dark-400">Profiles</p>
+                    <p className="text-white font-medium">
+                      {health.current_contexts}/{health.max_contexts}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-dark-400">Memory</p>
+                    <p className="text-white font-medium">
+                      {health.memory_used_mb}MB / {health.memory_total_mb}MB
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-dark-400">CPU</p>
+                    <p className="text-white font-medium">
+                      {health.cpu_usage?.toFixed(1)}%
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <button
+                onClick={() => deleteServer(server.id)}
+                className="btn btn-error"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Add Server Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-dark-800 rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-xl font-bold text-white mb-4">Add Server</h3>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Server Name
+                </label>
+                <input
+                  type="text"
+                  className="input w-full"
+                  placeholder="My Server"
+                  value={newServer.name}
+                  onChange={(e) =>
+                    setNewServer({ ...newServer, name: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Server URL
+                </label>
+                <input
+                  type="text"
+                  className="input w-full"
+                  placeholder="http://localhost:8080"
+                  value={newServer.url}
+                  onChange={(e) =>
+                    setNewServer({ ...newServer, url: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  API Key
+                </label>
+                <input
+                  type="text"
+                  className="input w-full font-mono text-sm"
+                  placeholder="bf_abc123xyz789"
+                  value={newServer.apiKey}
+                  onChange={(e) =>
+                    setNewServer({ ...newServer, apiKey: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="btn btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={addServer}
+                className="btn btn-primary flex-1"
+                disabled={
+                  !newServer.name || !newServer.url || !newServer.apiKey
+                }
+              >
+                Add Server
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default ServerList;
+
+client/src/components/ProxyManager.jsx
+
+import React, { useState, useEffect } from "react";
+import { Plus, Globe, Trash2, AlertCircle } from "lucide-react";
+import store from "../store/db";
+
+function ProxyManager() {
+  const [proxies, setProxies] = useState([]);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [filter, setFilter] = useState("all"); // all, active, blacklisted
+  const [newProxy, setNewProxy] = useState({
+    host: "",
+    port: "",
+    protocol: "http",
+    username: "",
+    password: "",
+    country: "",
+    blacklisted: false,
+    blacklistedSites: [],
+  });
+
+  useEffect(() => {
+    loadProxies();
+  }, []);
+
+  const loadProxies = async () => {
+    const storedProxies = (await store.get("proxies")) || [];
+    setProxies(storedProxies);
+  };
+
+  const addProxy = async () => {
+    const proxy = {
+      id: `proxy_${Date.now()}`,
+      ...newProxy,
+      port: parseInt(newProxy.port),
+      status: "active",
+      createdAt: new Date().toISOString(),
+    };
+
+    const updatedProxies = [...proxies, proxy];
+    await store.set("proxies", updatedProxies);
+    setProxies(updatedProxies);
+
+    setShowAddModal(false);
+    setNewProxy({
+      host: "",
+      port: "",
+      protocol: "http",
+      username: "",
+      password: "",
+      country: "",
+      blacklisted: false,
+      blacklistedSites: [],
+    });
+  };
+
+  const deleteProxy = async (proxyId) => {
+    if (!window.confirm("Are you sure you want to delete this proxy?")) return;
+
+    const updatedProxies = proxies.filter((p) => p.id !== proxyId);
+    await store.set("proxies", updatedProxies);
+    setProxies(updatedProxies);
+  };
+
+  const toggleBlacklist = async (proxyId, site) => {
+    const updatedProxies = proxies.map((p) => {
+      if (p.id === proxyId) {
+        const blacklistedSites = [...(p.blacklistedSites || [])];
+        if (blacklistedSites.includes(site)) {
+          return {
+            ...p,
+            blacklistedSites: blacklistedSites.filter((s) => s !== site),
+            blacklisted: blacklistedSites.length === 1 ? false : p.blacklisted,
+          };
+        } else {
+          return {
+            ...p,
+            blacklistedSites: [...blacklistedSites, site],
+            blacklisted: true,
+          };
+        }
+      }
+      return p;
+    });
+
+    await store.set("proxies", updatedProxies);
+    setProxies(updatedProxies);
+  };
+
+  const filteredProxies = proxies.filter((p) => {
+    if (filter === "active") return !p.blacklisted;
+    if (filter === "blacklisted") return p.blacklisted;
+    return true;
+  });
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold text-white">Proxies</h2>
+        <div className="flex items-center space-x-3">
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="input"
+          >
+            <option value="all">All Proxies</option>
+            <option value="active">Active Only</option>
+            <option value="blacklisted">Blacklisted Only</option>
+          </select>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="btn btn-primary flex items-center"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Add Proxy
+          </button>
+        </div>
+      </div>
+
+      <div className="grid gap-4">
+        {filteredProxies.map((proxy) => (
+          <div key={proxy.id} className="card">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-4">
+                <div
+                  className={`w-12 h-12 rounded-lg flex items-center justify-center ${
+                    proxy.blacklisted ? "bg-error-500/20" : "bg-success-500/20"
+                  }`}
+                >
+                  <Globe
+                    className={`w-6 h-6 ${
+                      proxy.blacklisted ? "text-error-500" : "text-success-500"
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-semibold text-white">
+                    {proxy.host}:{proxy.port}
+                  </h3>
+                  <p className="text-sm text-dark-400">
+                    {proxy.protocol.toUpperCase()} •{" "}
+                    {proxy.country || "Unknown"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-3">
+                <span
+                  className={`status-badge ${
+                    proxy.blacklisted ? "status-stopped" : "status-running"
+                  }`}
+                >
+                  {proxy.blacklisted ? "Blacklisted" : "Active"}
+                </span>
+                <button
+                  onClick={() => deleteProxy(proxy.id)}
+                  className="btn btn-error"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {proxy.blacklisted && proxy.blacklistedSites?.length > 0 && (
+              <div className="flex items-start space-x-2 text-sm">
+                <AlertCircle className="w-4 h-4 text-error-500 mt-0.5" />
+                <div>
+                  <p className="text-dark-400">Blacklisted on:</p>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {proxy.blacklistedSites.map((site) => (
+                      <span
+                        key={site}
+                        className="px-2 py-1 bg-error-500/20 text-error-500 rounded text-xs"
+                      >
+                        {site}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Add Proxy Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-dark-800 rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-xl font-bold text-white mb-4">Add Proxy</h3>
+
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-dark-300 mb-2">
+                    Host
+                  </label>
+                  <input
+                    type="text"
+                    className="input w-full"
+                    placeholder="1.2.3.4"
+                    value={newProxy.host}
+                    onChange={(e) =>
+                      setNewProxy({ ...newProxy, host: e.target.value })
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-dark-300 mb-2">
+                    Port
+                  </label>
+                  <input
+                    type="number"
+                    className="input w-full"
+                    placeholder="8080"
+                    value={newProxy.port}
+                    onChange={(e) =>
+                      setNewProxy({ ...newProxy, port: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Protocol
+                </label>
+                <select
+                  className="input w-full"
+                  value={newProxy.protocol}
+                  onChange={(e) =>
+                    setNewProxy({ ...newProxy, protocol: e.target.value })
+                  }
+                >
+                  <option value="http">HTTP</option>
+                  <option value="https">HTTPS</option>
+                  <option value="socks5">SOCKS5</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Country
+                </label>
+                <input
+                  type="text"
+                  className="input w-full"
+                  placeholder="US"
+                  value={newProxy.country}
+                  onChange={(e) =>
+                    setNewProxy({ ...newProxy, country: e.target.value })
+                  }
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-dark-300 mb-2">
+                    Username (optional)
+                  </label>
+                  <input
+                    type="text"
+                    className="input w-full"
+                    value={newProxy.username}
+                    onChange={(e) =>
+                      setNewProxy({ ...newProxy, username: e.target.value })
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-dark-300 mb-2">
+                    Password (optional)
+                  </label>
+                  <input
+                    type="password"
+                    className="input w-full"
+                    value={newProxy.password}
+                    onChange={(e) =>
+                      setNewProxy({ ...newProxy, password: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="btn btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={addProxy}
+                className="btn btn-primary flex-1"
+                disabled={!newProxy.host || !newProxy.port}
+              >
+                Add Proxy
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default ProxyManager;
+
+client/src/components/ProfileManager.jsx
+
+import React, { useState, useEffect } from "react";
+import { Plus, Layout, Play, Pause, Square, Trash2 } from "lucide-react";
+import store from "../store/db";
+import { apiClient } from "../api/client";
+
+function ProfileManager() {
+  const [profiles, setProfiles] = useState([]);
+  const [servers, setServers] = useState([]);
+  const [proxies, setProxies] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [newProfile, setNewProfile] = useState({
+    name: "",
+    serverId: "",
+    proxyId: "",
+    accountIds: [],
+    userAgent: "",
+    timezone: "America/New_York",
+    locale: "en-US",
+    scriptCode: "",
+    restartScriptCode: "",
+    memoryThresholdMb: 400,
+  });
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    setProfiles((await store.get("profiles")) || []);
+    setServers((await store.get("servers")) || []);
+    setProxies((await store.get("proxies")) || []);
+    setAccounts((await store.get("accounts")) || []);
+  };
+
+  const createProfile = async () => {
+    try {
+      const server = servers.find((s) => s.id === newProfile.serverId);
+      const proxy = proxies.find((p) => p.id === newProfile.proxyId);
+
+      if (!server || !proxy) {
+        alert("Please select valid server and proxy");
+        return;
+      }
+
+      // Create profile on server
+      const result = await apiClient.createProfile(server.id, {
+        name: newProfile.name,
+        proxy_id: proxy.id,
+        user_agent: newProfile.userAgent || undefined,
+        timezone: newProfile.timezone,
+        locale: newProfile.locale,
+        script_code: newProfile.scriptCode,
+        restart_script_code: newProfile.restartScriptCode || undefined,
+        memory_threshold_mb: newProfile.memoryThresholdMb,
+      });
+
+      // Register proxy with server
+      await apiClient.registerProxy(server.id, proxy);
+
+      // Save locally
+      const profile = {
+        id: result.id,
+        localId: `profile_${Date.now()}`,
+        ...newProfile,
+        status: "idle",
+        createdAt: new Date().toISOString(),
+      };
+
+      const updatedProfiles = [...profiles, profile];
+      await store.set("profiles", updatedProfiles);
+      setProfiles(updatedProfiles);
+
+      setShowAddModal(false);
+      resetNewProfile();
+
+      alert("Profile created successfully!");
+    } catch (error) {
+      console.error("Failed to create profile:", error);
+      alert("Failed to create profile: " + error.message);
+    }
+  };
+
+  const resetNewProfile = () => {
+    setNewProfile({
+      name: "",
+      serverId: "",
+      proxyId: "",
+      accountIds: [],
+      userAgent: "",
+      timezone: "America/New_York",
+      locale: "en-US",
+      scriptCode: "",
+      restartScriptCode: "",
+      memoryThresholdMb: 400,
+    });
+  };
+
+  const startProfile = async (profile) => {
+    try {
+      // Get accounts for this profile
+      const profileAccounts = {};
+      profile.accountIds.forEach((accountId) => {
+        const account = accounts.find((a) => a.id === accountId);
+        if (account) {
+          profileAccounts[accountId] = {
+            username: account.username,
+            password: account.password,
+            email: account.email,
+            phone: account.phone,
+          };
+        }
+      });
+
+      await apiClient.startProfile(
+        profile.serverId,
+        profile.id,
+        profileAccounts,
+      );
+
+      // Update local status
+      const updatedProfiles = profiles.map((p) =>
+        p.id === profile.id ? { ...p, status: "running" } : p,
+      );
+      await store.set("profiles", updatedProfiles);
+      setProfiles(updatedProfiles);
+    } catch (error) {
+      console.error("Failed to start profile:", error);
+      alert("Failed to start profile: " + error.message);
+    }
+  };
+
+  const pauseProfile = async (profile) => {
+    try {
+      await apiClient.pauseProfile(profile.serverId, profile.id);
+
+      const updatedProfiles = profiles.map((p) =>
+        p.id === profile.id ? { ...p, status: "paused" } : p,
+      );
+      await store.set("profiles", updatedProfiles);
+      setProfiles(updatedProfiles);
+    } catch (error) {
+      console.error("Failed to pause profile:", error);
+      alert("Failed to pause profile: " + error.message);
+    }
+  };
+
+  const stopProfile = async (profile) => {
+    try {
+      await apiClient.stopProfile(profile.serverId, profile.id);
+
+      const updatedProfiles = profiles.map((p) =>
+        p.id === profile.id ? { ...p, status: "stopped" } : p,
+      );
+      await store.set("profiles", updatedProfiles);
+      setProfiles(updatedProfiles);
+    } catch (error) {
+      console.error("Failed to stop profile:", error);
+      alert("Failed to stop profile: " + error.message);
+    }
+  };
+
+  const deleteProfile = async (profile) => {
+    if (!window.confirm("Are you sure you want to delete this profile?"))
+      return;
+
+    try {
+      await apiClient.deleteProfile(profile.serverId, profile.id);
+
+      const updatedProfiles = profiles.filter((p) => p.id !== profile.id);
+      await store.set("profiles", updatedProfiles);
+      setProfiles(updatedProfiles);
+    } catch (error) {
+      console.error("Failed to delete profile:", error);
+      alert("Failed to delete profile: " + error.message);
+    }
+  };
+
+  const getServerName = (serverId) => {
+    const server = servers.find((s) => s.id === serverId);
+    return server?.name || "Unknown";
+  };
+
+  const getProxyName = (proxyId) => {
+    const proxy = proxies.find((p) => p.id === proxyId);
+    return proxy ? `${proxy.host}:${proxy.port}` : "Unknown";
+  };
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold text-white">Profiles</h2>
+        <button
+          onClick={() => setShowAddModal(true)}
+          className="btn btn-primary flex items-center"
+        >
+          <Plus className="w-4 h-4 mr-2" />
+          New Profile
+        </button>
+      </div>
+
+      <div className="grid gap-4">
+        {profiles.map((profile) => (
+          <div key={profile.id} className="card">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-4">
+                <div className="w-12 h-12 rounded-lg bg-primary-500/20 flex items-center justify-center">
+                  <Layout className="w-6 h-6 text-primary-500" />
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-semibold text-white">
+                    {profile.name}
+                  </h3>
+                  <p className="text-sm text-dark-400">
+                    {getServerName(profile.serverId)} •{" "}
+                    {getProxyName(profile.proxyId)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-3">
+                <span className={`status-badge status-${profile.status}`}>
+                  {profile.status}
+                </span>
+
+                {profile.status === "idle" || profile.status === "stopped" ? (
+                  <button
+                    onClick={() => startProfile(profile)}
+                    className="btn btn-success"
+                  >
+                    <Play className="w-4 h-4" />
+                  </button>
+                ) : profile.status === "running" ? (
+                  <>
+                    <button
+                      onClick={() => pauseProfile(profile)}
+                      className="btn btn-secondary"
+                    >
+                      <Pause className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => stopProfile(profile)}
+                      className="btn btn-error"
+                    >
+                      <Square className="w-4 h-4" />
+                    </button>
+                  </>
+                ) : profile.status === "paused" ? (
+                  <>
+                    <button
+                      onClick={() => startProfile(profile)}
+                      className="btn btn-success"
+                    >
+                      <Play className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => stopProfile(profile)}
+                      className="btn btn-error"
+                    >
+                      <Square className="w-4 h-4" />
+                    </button>
+                  </>
+                ) : null}
+
+                <button
+                  onClick={() => deleteProfile(profile)}
+                  className="btn btn-error"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4 text-sm">
+              <div>
+                <p className="text-dark-400">Memory Limit</p>
+                <p className="text-white">{profile.memoryThresholdMb}MB</p>
+              </div>
+              <div>
+                <p className="text-dark-400">Accounts</p>
+                <p className="text-white">{profile.accountIds?.length || 0}</p>
+              </div>
+              <div>
+                <p className="text-dark-400">Timezone</p>
+                <p className="text-white">{profile.timezone}</p>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Add Profile Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-y-auto">
+          <div className="bg-dark-800 rounded-lg p-6 w-full max-w-2xl m-4 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-xl font-bold text-white mb-4">New Profile</h3>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Profile Name
+                </label>
+                <input
+                  type="text"
+                  className="input w-full"
+                  placeholder="Instagram Bot #1"
+                  value={newProfile.name}
+                  onChange={(e) =>
+                    setNewProfile({ ...newProfile, name: e.target.value })
+                  }
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-dark-300 mb-2">
+                    Server
+                  </label>
+                  <select
+                    className="input w-full"
+                    value={newProfile.serverId}
+                    onChange={(e) =>
+                      setNewProfile({ ...newProfile, serverId: e.target.value })
+                    }
+                  >
+                    <option value="">Select server</option>
+                    {servers.map((server) => (
+                      <option key={server.id} value={server.id}>
+                        {server.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm text-dark-300 mb-2">
+                    Proxy
+                  </label>
+                  <select
+                    className="input w-full"
+                    value={newProfile.proxyId}
+                    onChange={(e) =>
+                      setNewProfile({ ...newProfile, proxyId: e.target.value })
+                    }
+                  >
+                    <option value="">Select proxy</option>
+                    {proxies
+                      .filter((p) => !p.blacklisted)
+                      .map((proxy) => (
+                        <option key={proxy.id} value={proxy.id}>
+                          {proxy.host}:{proxy.port} ({proxy.country})
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-dark-300 mb-2">
+                    Timezone
+                  </label>
+                  <input
+                    type="text"
+                    className="input w-full"
+                    placeholder="America/New_York"
+                    value={newProfile.timezone}
+                    onChange={(e) =>
+                      setNewProfile({ ...newProfile, timezone: e.target.value })
+                    }
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm text-dark-300 mb-2">
+                    Locale
+                  </label>
+                  <input
+                    type="text"
+                    className="input w-full"
+                    placeholder="en-US"
+                    value={newProfile.locale}
+                    onChange={(e) =>
+                      setNewProfile({ ...newProfile, locale: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  User Agent (optional)
+                </label>
+                <input
+                  type="text"
+                  className="input w-full"
+                  placeholder="Leave blank for auto-generate"
+                  value={newProfile.userAgent}
+                  onChange={(e) =>
+                    setNewProfile({ ...newProfile, userAgent: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Memory Threshold (MB)
+                </label>
+                <input
+                  type="number"
+                  className="input w-full"
+                  value={newProfile.memoryThresholdMb}
+                  onChange={(e) =>
+                    setNewProfile({
+                      ...newProfile,
+                      memoryThresholdMb: parseInt(e.target.value),
+                    })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Script Code
+                </label>
+                <textarea
+                  className="input w-full font-mono text-sm"
+                  rows="10"
+                  placeholder="# Python script here"
+                  value={newProfile.scriptCode}
+                  onChange={(e) =>
+                    setNewProfile({ ...newProfile, scriptCode: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Restart Script (optional)
+                </label>
+                <textarea
+                  className="input w-full font-mono text-sm"
+                  rows="5"
+                  placeholder="# Restart script here"
+                  value={newProfile.restartScriptCode}
+                  onChange={(e) =>
+                    setNewProfile({
+                      ...newProfile,
+                      restartScriptCode: e.target.value,
+                    })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Accounts
+                </label>
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {accounts
+                    .filter((a) => !a.banned)
+                    .map((account) => (
+                      <label
+                        key={account.id}
+                        className="flex items-center space-x-2 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={newProfile.accountIds.includes(account.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setNewProfile({
+                                ...newProfile,
+                                accountIds: [
+                                  ...newProfile.accountIds,
+                                  account.id,
+                                ],
+                              });
+                            } else {
+                              setNewProfile({
+                                ...newProfile,
+                                accountIds: newProfile.accountIds.filter(
+                                  (id) => id !== account.id,
+                                ),
+                              });
+                            }
+                          }}
+                          className="rounded"
+                        />
+                        <span className="text-sm text-white">
+                          {account.platform} - {account.username}
+                        </span>
+                      </label>
+                    ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowAddModal(false);
+                  resetNewProfile();
+                }}
+                className="btn btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={createProfile}
+                className="btn btn-primary flex-1"
+                disabled={
+                  !newProfile.name ||
+                  !newProfile.serverId ||
+                  !newProfile.proxyId ||
+                  !newProfile.scriptCode
+                }
+              >
+                Create Profile
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default ProfileManager;
+
+client/src/components/LiveScreenGrid.jsx
+
+import React from "react";
+import { useNavigate } from "react-router-dom";
+import LiveScreenCard from "./LiveScreenCard";
+
+function LiveScreenGrid({ screens }) {
+  const navigate = useNavigate();
+
+  const handleExpand = (profileId) => {
+    navigate(`/monitoring/${profileId}`);
+  };
+
+  if (!screens || screens.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center">
+          <p className="text-xl text-dark-400 mb-4">No screens to display</p>
+          <p className="text-sm text-dark-500">
+            Launch a profile to view live screens
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`grid gap-6 ${
+        screens.length === 1
+          ? "grid-cols-1"
+          : screens.length === 2
+            ? "grid-cols-2"
+            : screens.length === 3
+              ? "grid-cols-3"
+              : "grid-cols-2 xl:grid-cols-4"
+      }`}
+    >
+      {screens.map((screen) => (
+        <LiveScreenCard
+          key={screen.profileId}
+          serverId={screen.serverId}
+          profileId={screen.profileId}
+          profileName={screen.profileName}
+          onExpand={() => handleExpand(screen.profileId)}
+        />
+      ))}
+    </div>
+  );
+}
+
+export default LiveScreenGrid;
+
+client/src/components/LiveScreenCard.jsx
+
+import React, { useState, useEffect, useRef } from "react";
+import { Maximize2, Pause, Play, Square } from "lucide-react";
+import { apiClient } from "../api/client";
+
+function LiveScreenCard({ serverId, profileId, profileName, onExpand }) {
+  const [imageUrl, setImageUrl] = useState(null);
+  const [status, setStatus] = useState("idle");
+  const wsRef = useRef(null);
+  const intervalRef = useRef(null);
+
+  useEffect(() => {
+    startStreaming();
+    return () => stopStreaming();
+  }, [serverId, profileId]);
+
+  const startStreaming = () => {
+    // Use periodic screenshots instead of WebSocket for simplicity
+    intervalRef.current = setInterval(async () => {
+      try {
+        const url = await apiClient.getScreenshot(serverId, profileId);
+        setImageUrl(url);
+      } catch (error) {
+        console.error("Failed to fetch screenshot:", error);
+      }
+    }, 1000); // Update every second
+  };
+
+  const stopStreaming = () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+  };
+
+  return (
+    <div className="card group relative overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-sm font-medium text-white">{profileName}</h3>
+          <p className="text-xs text-dark-400">Profile ID: {profileId}</p>
+        </div>
+        <div className="flex items-center space-x-2">
+          <span className={`status-badge status-${status}`}>{status}</span>
+          <button
+            onClick={onExpand}
+            className="p-1 text-dark-400 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
+          >
+            <Maximize2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Screen */}
+      <div className="relative aspect-video bg-dark-900 rounded-lg overflow-hidden">
+        {imageUrl ? (
+          <img
+            src={imageUrl}
+            alt="Live screen"
+            className="w-full h-full object-contain"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <div className="text-center">
+              <div className="animate-spin w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full mx-auto mb-2"></div>
+              <p className="text-sm text-dark-400">Loading...</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default LiveScreenCard;
+
+client/src/components/Header.jsx
+
+import React from "react";
+import { Bell, Settings } from "lucide-react";
+
+function Header() {
+  return (
+    <header className="h-16 bg-dark-900 border-b border-dark-700 flex items-center justify-between px-6">
+      <div>
+        <h1 className="text-xl font-semibold text-white">Dashboard</h1>
+      </div>
+
+      <div className="flex items-center space-x-4">
+        <button className="p-2 text-dark-400 hover:text-white hover:bg-dark-800 rounded-lg transition-colors">
+          <Bell className="w-5 h-5" />
+        </button>
+        <button className="p-2 text-dark-400 hover:text-white hover:bg-dark-800 rounded-lg transition-colors">
+          <Settings className="w-5 h-5" />
+        </button>
+      </div>
+    </header>
+  );
+}
+
+export default Header;
+
+client/src/components/AccountVault.jsx
+
+import React, { useState, useEffect } from "react";
+import { Plus, User, Trash2, Eye, EyeOff } from "lucide-react";
+import store from "../store/db";
+
+function AccountVault() {
+  const [accounts, setAccounts] = useState([]);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [visiblePasswords, setVisiblePasswords] = useState({});
+  const [newAccount, setNewAccount] = useState({
+    platform: "",
+    platformUrl: "",
+    username: "",
+    password: "",
+    email: "",
+    phone: "",
+    notes: "",
+    status: "active",
+  });
+
+  useEffect(() => {
+    loadAccounts();
+  }, []);
+
+  const loadAccounts = async () => {
+    const storedAccounts = (await store.get("accounts")) || [];
+    setAccounts(storedAccounts);
+  };
+
+  const addAccount = async () => {
+    const account = {
+      id: `acc_${Date.now()}`,
+      ...newAccount,
+      banned: false,
+      createdAt: new Date().toISOString(),
+      lastUsed: null,
+    };
+
+    const updatedAccounts = [...accounts, account];
+    await store.set("accounts", updatedAccounts);
+    setAccounts(updatedAccounts);
+
+    setShowAddModal(false);
+    setNewAccount({
+      platform: "",
+      platformUrl: "",
+      username: "",
+      password: "",
+      email: "",
+      phone: "",
+      notes: "",
+      status: "active",
+    });
+  };
+
+  const deleteAccount = async (accountId) => {
+    if (!window.confirm("Are you sure you want to delete this account?"))
+      return;
+
+    const updatedAccounts = accounts.filter((a) => a.id !== accountId);
+    await store.set("accounts", updatedAccounts);
+    setAccounts(updatedAccounts);
+  };
+
+  const toggleBanned = async (accountId) => {
+    const updatedAccounts = accounts.map((a) => {
+      if (a.id === accountId) {
+        return {
+          ...a,
+          banned: !a.banned,
+          status: a.banned ? "active" : "banned",
+        };
+      }
+      return a;
+    });
+
+    await store.set("accounts", updatedAccounts);
+    setAccounts(updatedAccounts);
+  };
+
+  const togglePasswordVisibility = (accountId) => {
+    setVisiblePasswords((prev) => ({
+      ...prev,
+      [accountId]: !prev[accountId],
+    }));
+  };
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold text-white">Account Vault</h2>
+        <button
+          onClick={() => setShowAddModal(true)}
+          className="btn btn-primary flex items-center"
+        >
+          <Plus className="w-4 h-4 mr-2" />
+          Add Account
+        </button>
+      </div>
+
+      <div className="grid gap-4">
+        {accounts.map((account) => (
+          <div key={account.id} className="card">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-4">
+                <div
+                  className={`w-12 h-12 rounded-lg flex items-center justify-center ${
+                    account.banned ? "bg-error-500/20" : "bg-primary-500/20"
+                  }`}
+                >
+                  <User
+                    className={`w-6 h-6 ${
+                      account.banned ? "text-error-500" : "text-primary-500"
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-semibold text-white">
+                    {account.username}
+                  </h3>
+                  <p className="text-sm text-dark-400">{account.platform}</p>
+                  {account.platformUrl && (
+                    <a
+                      href={account.platformUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-primary-400 hover:underline"
+                    >
+                      {account.platformUrl}
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={() => toggleBanned(account.id)}
+                  className={`btn ${account.banned ? "btn-success" : "btn-error"}`}
+                >
+                  {account.banned ? "Unban" : "Mark Banned"}
+                </button>
+                <button
+                  onClick={() => deleteAccount(account.id)}
+                  className="btn btn-error"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p className="text-dark-400">Email</p>
+                <p className="text-white">{account.email || "N/A"}</p>
+              </div>
+              <div>
+                <p className="text-dark-400">Phone</p>
+                <p className="text-white">{account.phone || "N/A"}</p>
+              </div>
+              <div className="col-span-2">
+                <p className="text-dark-400">Password</p>
+                <div className="flex items-center space-x-2">
+                  <p className="text-white font-mono">
+                    {visiblePasswords[account.id]
+                      ? account.password
+                      : "••••••••"}
+                  </p>
+                  <button
+                    onClick={() => togglePasswordVisibility(account.id)}
+                    className="text-dark-400 hover:text-white"
+                  >
+                    {visiblePasswords[account.id] ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+              {account.notes && (
+                <div className="col-span-2">
+                  <p className="text-dark-400">Notes</p>
+                  <p className="text-white">{account.notes}</p>
+                </div>
+              )}
+            </div>
+
+            {account.banned && (
+              <div className="mt-4 p-3 bg-error-500/10 border border-error-500/30 rounded-lg">
+                <p className="text-sm text-error-500">
+                  ⚠️ This account is marked as banned
+                </p>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Add Account Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-y-auto">
+          <div className="bg-dark-800 rounded-lg p-6 w-full max-w-md m-4">
+            <h3 className="text-xl font-bold text-white mb-4">Add Account</h3>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Platform
+                </label>
+                <input
+                  type="text"
+                  className="input w-full"
+                  placeholder="Instagram"
+                  value={newAccount.platform}
+                  onChange={(e) =>
+                    setNewAccount({ ...newAccount, platform: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Platform URL
+                </label>
+                <input
+                  type="url"
+                  className="input w-full"
+                  placeholder="https://instagram.com"
+                  value={newAccount.platformUrl}
+                  onChange={(e) =>
+                    setNewAccount({
+                      ...newAccount,
+                      platformUrl: e.target.value,
+                    })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Username
+                </label>
+                <input
+                  type="text"
+                  className="input w-full"
+                  placeholder="myusername"
+                  value={newAccount.username}
+                  onChange={(e) =>
+                    setNewAccount({ ...newAccount, username: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  className="input w-full"
+                  placeholder="••••••••"
+                  value={newAccount.password}
+                  onChange={(e) =>
+                    setNewAccount({ ...newAccount, password: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Email (optional)
+                </label>
+                <input
+                  type="email"
+                  className="input w-full"
+                  placeholder="email@example.com"
+                  value={newAccount.email}
+                  onChange={(e) =>
+                    setNewAccount({ ...newAccount, email: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Phone (optional)
+                </label>
+                <input
+                  type="tel"
+                  className="input w-full"
+                  placeholder="+1234567890"
+                  value={newAccount.phone}
+                  onChange={(e) =>
+                    setNewAccount({ ...newAccount, phone: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Notes (optional)
+                </label>
+                <textarea
+                  className="input w-full"
+                  rows="3"
+                  placeholder="Additional notes..."
+                  value={newAccount.notes}
+                  onChange={(e) =>
+                    setNewAccount({ ...newAccount, notes: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="btn btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={addAccount}
+                className="btn btn-primary flex-1"
+                disabled={
+                  !newAccount.platform ||
+                  !newAccount.username ||
+                  !newAccount.password
+                }
+              >
+                Add Account
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default AccountVault;
+
+client/src/api/client.js
+
+import axios from "axios";
+
+class BrowserFarmClient {
+  constructor() {
+    this.servers = new Map();
+  }
+
+  addServer(id, url, apiKey) {
+    const client = axios.create({
+      baseURL: url,
+      headers: {
+        "X-API-Key": apiKey,
+      },
+    });
+    this.servers.set(id, { url, apiKey, client });
+  }
+
+  removeServer(id) {
+    this.servers.delete(id);
+  }
+
+  getClient(serverId) {
+    const server = this.servers.get(serverId);
+    if (!server) throw new Error("Server not found");
+    return server.client;
+  }
+
+  // Health
+  async getHealth(serverId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.get("/health");
+    return data;
+  }
+
+  // Proxies
+  async registerProxy(serverId, proxy) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post("/proxies", proxy);
+    return data;
+  }
+
+  // Profiles
+  async listProfiles(serverId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.get("/profiles");
+    return data.profiles;
+  }
+
+  async createProfile(serverId, profile) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post("/profiles", profile);
+    return data;
+  }
+
+  async getProfile(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.get(`/profiles/${profileId}`);
+    return data;
+  }
+
+  async startProfile(serverId, profileId, accounts) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post(
+      `/profiles/${profileId}/start`,
+      accounts,
+    );
+    return data;
+  }
+
+  async pauseProfile(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post(`/profiles/${profileId}/pause`);
+    return data;
+  }
+
+  async stopProfile(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post(`/profiles/${profileId}/stop`);
+    return data;
+  }
+
+  async deleteProfile(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.delete(`/profiles/${profileId}`);
+    return data;
+  }
+
+  // Screenshots
+  async getScreenshot(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const response = await client.get(`/profiles/${profileId}/screen`, {
+      responseType: "blob",
+    });
+    return URL.createObjectURL(response.data);
+  }
+
+  async listScreenshots(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.get(`/profiles/${profileId}/screenshots`);
+    return data.screenshots;
+  }
+
+  async takeScreenshot(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post(`/profiles/${profileId}/screenshot`);
+    return data;
+  }
+
+  // Metrics
+  async getMetrics(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.get(`/profiles/${profileId}/metrics`);
+    return data;
+  }
+
+  // WebSocket URLs
+  getStreamUrl(serverId, profileId) {
+    const server = this.servers.get(serverId);
+    const wsUrl = server.url.replace("http", "ws");
+    return `${wsUrl}/profiles/${profileId}/stream`;
+  }
+
+  getControlUrl(serverId, profileId) {
+    const server = this.servers.get(serverId);
+    const wsUrl = server.url.replace("http", "ws");
+    return `${wsUrl}/profiles/${profileId}/control`;
+  }
+}
+
+export const apiClient = new BrowserFarmClient();
+export default apiClient;
+
+client/public/index.html
+
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <link rel="icon" href="%PUBLIC_URL%/icon.png" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="theme-color" content="#0f172a" />
+        <meta
+            name="description"
+            content="Browser Farm - Distributed Browser Automation"
+        />
+        <link rel="apple-touch-icon" href="%PUBLIC_URL%/icon.png" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+            rel="stylesheet"
+        />
+        <title>Browser Farm</title>
+    </head>
+    <body>
+        <noscript>You need to enable JavaScript to run this app.</noscript>
+        <div id="root"></div>
+    </body>
+</html>
