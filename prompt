@@ -29,31 +29,84 @@ Your Custom Scripts
 
 ### Server Setup
 
-1. **Install system dependencies:**
+**1. Install system dependencies:**
 ```bash
 sudo apt update
-sudo apt install -y python3.11 python3-pip xvfb chromium-browser
+sudo apt install -y python3.10-venv python3-pip xvfb chromium-browser
 ```
 
-2. **Install Browser Farm server:**
+**2. Create installation directory:**
 ```bash
-cd server
-pip install -r requirements.txt
+sudo mkdir -p /opt/browser-farm
+cd /opt/browser-farm
+```
+
+**3. Create Virtual Environment & Install Package:**
+```bash
+# Create virtual environment
+python3 -m venv venv
+
+# Activate it
+source venv/bin/activate
+
+# Install from PyPI
+pip install browser-farm
+
+# Install Playwright browsers
 playwright install chromium
 ```
 
-3. **Start the server:**
+**4. Manual Run (Testing):**
 ```bash
 python -m browser_farm.server --host 0.0.0.0 --port 8080
 ```
 
-Output:
+### Production Deployment (Systemd)
+
+To run the server 24/7 with automatic restarts, use Systemd.
+
+**1. Create Service File:**
+```bash
+sudo nano /etc/systemd/system/browser-farm.service
 ```
-✓ Xvfb started on :99
-✓ Chromium launched
-✓ Server running on http://192.168.1.100:8080
-✓ API Key: bf_abc123xyz789
+
+**2. Paste Configuration:**
+```ini
+[Unit]
+Description=Browser Farm Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+# Required for Xvfb and Headful browsers
+Environment="DISPLAY=:99"
+WorkingDirectory=/opt/browser-farm
+# Activate venv and run server
+ExecStart=/opt/browser-farm/venv/bin/python -m browser_farm.server --host 0.0.0.0 --port 8080
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
 ```
+
+**3. Start and Enable Service:**
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable browser-farm
+sudo systemctl start browser-farm
+```
+
+**4. Verify Status & Get API Key:**
+```bash
+# Check if running
+sudo systemctl status browser-farm
+
+# View logs to find your generated API Key
+sudo journalctl -u browser-farm -f
+```
+*Look for the line: `✓ API Key: bf_...`*
 
 ### Client Setup
 
@@ -108,31 +161,36 @@ npm run dist
 
 ## Writing Scripts
 
-Scripts are standard Python using Playwright. Reference accounts by ID.
+Scripts are standard Python using Playwright. The `get_account` function is injected into your script's namespace at runtime, allowing you to securely access credentials attached to the profile.
 
-Example:
+**Example Script:**
 ```python
-from browser_farm import get_account
 import asyncio
 
 async def main(context):
-    # Get account credentials
+    # 1. Get account credentials
+    # Note: 'get_account' is injected automatically.
+    # Use the Account ID from your Account Vault.
     account = get_account("acc_001")
 
     page = await context.new_page()
     await page.goto("https://instagram.com/accounts/login/")
 
-    # Login
+    # 2. Login using credentials
     await page.fill('input[name="username"]', account['username'])
     await page.fill('input[name="password"]', account['password'])
     await page.click('button[type="submit"]')
 
-    # Wait for success
-    await page.wait_for_url("https://instagram.com/")
+    # 3. Wait for success
+    try:
+        await page.wait_for_url("https://instagram.com/", timeout=10000)
+        print("Login successful!")
+    except:
+        print("Login failed or challenged")
 
-    # Your automation logic here
+    # 4. Your automation logic here
     while True:
-        # Do something
+        # Keep session alive or perform tasks
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
@@ -178,7 +236,7 @@ MIT License - see [LICENSE](./LICENSE)
 
 ## Support
 
-- GitHub Issues: [Issues](https://github.com/yourusername/browser-farm/issues)
+- GitHub Issues: [Issues](https://github.com/RebornBeat/browser-farm/issues)
 - Discord: [Join Server](https://discord.gg/browserfarm)
 
 ## Roadmap
@@ -188,7 +246,6 @@ MIT License - see [LICENSE](./LICENSE)
 - [ ] Plugin system for custom integrations
 - [ ] Cloud proxy integration
 - [ ] Mobile app (iOS/Android)
-
 
 server/setup.py
 
@@ -816,16 +873,29 @@ if __name__ == "__main__":
 
 server/src/script_runner.py
 
+Here is the fully updated `server/src/script_runner.py` with the critical concurrency fix applied. I have removed the unsafe `os.environ` usage and injected the `get_account` function directly into the script namespace.
+
+```python
 import asyncio
 import logging
-import json
-import os
 from pathlib import Path
 from typing import Dict, Optional
 from playwright.async_api import BrowserContext
 from .models import ProfileStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _create_get_account_function(accounts: Dict[str, dict]):
+    """
+    Creates a closure for the get_account function bound to a specific
+    set of accounts. This ensures thread-safety for concurrent profiles.
+    """
+    def get_account(account_id: str) -> dict:
+        if account_id not in accounts:
+            raise ValueError(f"Account {account_id} not found")
+        return accounts[account_id]
+    return get_account
 
 
 class ScriptRunner:
@@ -903,16 +973,18 @@ class ScriptRunner:
         try:
             script_logger.info("Script started")
 
-            # Prepare environment
-            accounts_json = json.dumps(self.accounts)
-            os.environ["BROWSER_FARM_ACCOUNTS"] = accounts_json
+            # --- CRITICAL FIX START ---
+            # Create the specific get_account function for THIS profile's accounts.
+            # This replaces the unsafe os.environ method, preventing race conditions
+            # when multiple profiles run on the same server.
+            injected_get_account = _create_get_account_function(self.accounts)
 
-            # Execute script
-            # Create a namespace with context available
+            # Create a namespace with context and the injected function available
             namespace = {
                 "context": self.context,
                 "asyncio": asyncio,
                 "__name__": "__main__",
+                "get_account": injected_get_account,  # Injected here
             }
 
             # Execute the script code
@@ -921,6 +993,7 @@ class ScriptRunner:
             # If script has a main function, run it
             if "main" in namespace and callable(namespace["main"]):
                 await namespace["main"](self.context)
+            # --- CRITICAL FIX END ---
 
             script_logger.info("Script completed")
             self.status = ProfileStatus.IDLE
@@ -932,6 +1005,7 @@ class ScriptRunner:
             script_logger.error(f"Script error: {e}", exc_info=True)
             self.status = ProfileStatus.CRASHED
             raise
+```
 
 server/src/models.py
 
@@ -1695,7 +1769,7 @@ function createWindow() {
     mainWindow.loadURL("http://localhost:3000");
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, "build", "index.html"));
+    mainWindow.loadFile(path.join(__dirname, "index.html"));
   }
 
   mainWindow.once("ready-to-show", () => {

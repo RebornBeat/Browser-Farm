@@ -1,6 +1,14 @@
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Home, Server, Globe, Users, Layout, Activity } from "lucide-react";
+import {
+  Home,
+  Server,
+  Globe,
+  Users,
+  Layout,
+  Activity,
+  Code,
+} from "lucide-react";
 
 const menuItems = [
   { path: "/", icon: Home, label: "Home" },
@@ -8,6 +16,7 @@ const menuItems = [
   { path: "/proxies", icon: Globe, label: "Proxies" },
   { path: "/accounts", icon: Users, label: "Accounts" },
   { path: "/profiles", icon: Layout, label: "Profiles" },
+  { path: "/scripts", icon: Code, label: "Scripts" },
 ];
 
 function Sidebar() {

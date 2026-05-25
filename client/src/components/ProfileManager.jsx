@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Plus, Layout, Play, Pause, Square, Trash2 } from "lucide-react";
+import { Plus, Layout, Play, Pause, Square, Trash2, Code } from "lucide-react";
 import store from "../store/db";
 import { apiClient } from "../api/client";
 
@@ -8,7 +8,12 @@ function ProfileManager() {
   const [servers, setServers] = useState([]);
   const [proxies, setProxies] = useState([]);
   const [accounts, setAccounts] = useState([]);
+  const [scripts, setScripts] = useState([]); // Script Library
+
   const [showAddModal, setShowAddModal] = useState(false);
+  const [profileMode, setProfileMode] = useState("automated"); // 'manual', 'automated', 'command_center'
+  const [selectedScriptIds, setSelectedScriptIds] = useState([]);
+
   const [newProfile, setNewProfile] = useState({
     name: "",
     serverId: "",
@@ -17,8 +22,6 @@ function ProfileManager() {
     userAgent: "",
     timezone: "America/New_York",
     locale: "en-US",
-    scriptCode: "",
-    restartScriptCode: "",
     memoryThresholdMb: 400,
   });
 
@@ -31,6 +34,7 @@ function ProfileManager() {
     setServers((await store.get("servers")) || []);
     setProxies((await store.get("proxies")) || []);
     setAccounts((await store.get("accounts")) || []);
+    setScripts((await store.get("scripts")) || []);
   };
 
   const createProfile = async () => {
@@ -43,26 +47,47 @@ function ProfileManager() {
         return;
       }
 
-      // Create profile on server
+      if (profileMode !== "manual" && selectedScriptIds.length === 0) {
+        alert(
+          "Please select at least one script for Automated/Command Center modes.",
+        );
+        return;
+      }
+
+      // 1. Prepare Scripts and Requirements
+      const selectedScripts = scripts.filter((s) =>
+        selectedScriptIds.includes(s.id),
+      );
+      const scriptCodes = selectedScripts.map((s) => s.code);
+
+      // Aggregate unique requirements
+      const requirements = [
+        ...new Set(selectedScripts.flatMap((s) => s.requirements || [])),
+      ];
+
+      // 2. Create profile on server
       const result = await apiClient.createProfile(server.id, {
         name: newProfile.name,
+        mode: profileMode,
         proxy_id: proxy.id,
         user_agent: newProfile.userAgent || undefined,
         timezone: newProfile.timezone,
         locale: newProfile.locale,
-        script_code: newProfile.scriptCode,
-        restart_script_code: newProfile.restartScriptCode || undefined,
+        scripts: scriptCodes, // Send array of code
+        requirements: requirements, // Send aggregated requirements
         memory_threshold_mb: newProfile.memoryThresholdMb,
       });
 
-      // Register proxy with server
+      // 3. Register proxy with server
       await apiClient.registerProxy(server.id, proxy);
 
-      // Save locally
+      // 4. Save locally
       const profile = {
         id: result.id,
         localId: `profile_${Date.now()}`,
         ...newProfile,
+        mode: profileMode,
+        scriptIds: selectedScriptIds, // Store IDs for reference
         status: "idle",
         createdAt: new Date().toISOString(),
       };
@@ -90,10 +115,10 @@ function ProfileManager() {
       userAgent: "",
       timezone: "America/New_York",
       locale: "en-US",
-      scriptCode: "",
-      restartScriptCode: "",
       memoryThresholdMb: 400,
     });
+    setSelectedScriptIds([]);
+    setProfileMode("automated");
   };
 
   const startProfile = async (profile) => {
@@ -186,6 +211,13 @@ function ProfileManager() {
     return proxy ? `${proxy.host}:${proxy.port}` : "Unknown";
   };
 
+  const getScriptNames = (scriptIds) => {
+    if (!scriptIds || scriptIds.length === 0) return "None";
+    return scriptIds
+      .map((id) => scripts.find((s) => s.id === id)?.name || id)
+      .join(", ");
+  };
+
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
@@ -204,13 +236,32 @@ function ProfileManager() {
           <div key={profile.id} className="card">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center space-x-4">
-                <div className="w-12 h-12 rounded-lg bg-primary-500/20 flex items-center justify-center">
-                  <Layout className="w-6 h-6 text-primary-500" />
+                <div
+                  className={`w-12 h-12 rounded-lg flex items-center justify-center ${
+                    profile.mode === "command_center"
+                      ? "bg-warning-500/20"
+                      : profile.mode === "manual"
+                        ? "bg-dark-700"
+                        : "bg-primary-500/20"
+                  }`}
+                >
+                  <Layout
+                    className={`w-6 h-6 ${
+                      profile.mode === "command_center"
+                        ? "text-warning-500"
+                        : profile.mode === "manual"
+                          ? "text-dark-400"
+                          : "text-primary-500"
+                    }`}
+                  />
                 </div>
 
                 <div>
                   <h3 className="text-lg font-semibold text-white">
                     {profile.name}
+                    <span className="ml-2 text-xs font-normal text-dark-500 uppercase">
+                      ({profile.mode || "automated"})
+                    </span>
                   </h3>
                   <p className="text-sm text-dark-400">
                     {getServerName(profile.serverId)} •{" "}
@@ -282,8 +333,13 @@ function ProfileManager() {
                 <p className="text-white">{profile.accountIds?.length || 0}</p>
               </div>
               <div>
-                <p className="text-dark-400">Timezone</p>
-                <p className="text-white">{profile.timezone}</p>
+                <p className="text-dark-400">Scripts</p>
+                <p
+                  className="text-white truncate"
+                  title={getScriptNames(profile.scriptIds)}
+                >
+                  {getScriptNames(profile.scriptIds)}
+                </p>
               </div>
             </div>
           </div>
@@ -297,6 +353,7 @@ function ProfileManager() {
             <h3 className="text-xl font-bold text-white mb-4">New Profile</h3>
 
             <div className="space-y-4">
+              {/* Profile Name */}
               <div>
                 <label className="block text-sm text-dark-300 mb-2">
                   Profile Name
@@ -312,6 +369,25 @@ function ProfileManager() {
                 />
               </div>
 
+              {/* Mode Selector */}
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Profile Mode
+                </label>
+                <select
+                  className="input w-full"
+                  value={profileMode}
+                  onChange={(e) => setProfileMode(e.target.value)}
+                >
+                  <option value="manual">Manual (Browser Only)</option>
+                  <option value="automated">Automated (Script Chain)</option>
+                  <option value="command_center">
+                    Command Center (Orchestrator)
+                  </option>
+                </select>
+              </div>
+
+              {/* Server & Proxy */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm text-dark-300 mb-2">
@@ -356,6 +432,60 @@ function ProfileManager() {
                 </div>
               </div>
 
+              {/* Script Selection (Conditional) */}
+              {profileMode !== "manual" && (
+                <div>
+                  <label className="block text-sm text-dark-300 mb-2">
+                    Select Scripts (In Order)
+                  </label>
+                  {scripts.length === 0 ? (
+                    <div className="text-sm text-warning-500 bg-dark-900 p-3 rounded-lg">
+                      No scripts found in library. Create scripts in the "Script
+                      Library" tab first.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 bg-dark-900 p-3 rounded-lg max-h-48 overflow-y-auto">
+                      {scripts.map((script) => (
+                        <label
+                          key={script.id}
+                          className="flex items-center space-x-3 cursor-pointer p-2 hover:bg-dark-800 rounded"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedScriptIds.includes(script.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedScriptIds([
+                                  ...selectedScriptIds,
+                                  script.id,
+                                ]);
+                              } else {
+                                setSelectedScriptIds(
+                                  selectedScriptIds.filter(
+                                    (id) => id !== script.id,
+                                  ),
+                                );
+                              }
+                            }}
+                            className="rounded"
+                          />
+                          <Code className="w-4 h-4 text-primary-400" />
+                          <div className="flex-1">
+                            <span className="text-white">{script.name}</span>
+                            {script.requirements?.length > 0 && (
+                              <span className="text-xs text-dark-500 ml-2">
+                                (Deps: {script.requirements.join(", ")})
+                              </span>
+                            )}
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Config Grid */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm text-dark-300 mb-2">
@@ -371,7 +501,6 @@ function ProfileManager() {
                     }
                   />
                 </div>
-
                 <div>
                   <label className="block text-sm text-dark-300 mb-2">
                     Locale
@@ -415,39 +544,6 @@ function ProfileManager() {
                     setNewProfile({
                       ...newProfile,
                       memoryThresholdMb: parseInt(e.target.value),
-                    })
-                  }
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-dark-300 mb-2">
-                  Script Code
-                </label>
-                <textarea
-                  className="input w-full font-mono text-sm"
-                  rows="10"
-                  placeholder="# Python script here"
-                  value={newProfile.scriptCode}
-                  onChange={(e) =>
-                    setNewProfile({ ...newProfile, scriptCode: e.target.value })
-                  }
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-dark-300 mb-2">
-                  Restart Script (optional)
-                </label>
-                <textarea
-                  className="input w-full font-mono text-sm"
-                  rows="5"
-                  placeholder="# Restart script here"
-                  value={newProfile.restartScriptCode}
-                  onChange={(e) =>
-                    setNewProfile({
-                      ...newProfile,
-                      restartScriptCode: e.target.value,
                     })
                   }
                 />
@@ -514,7 +610,7 @@ function ProfileManager() {
                   !newProfile.name ||
                   !newProfile.serverId ||
                   !newProfile.proxyId ||
-                  !newProfile.scriptCode
+                  (profileMode !== "manual" && selectedScriptIds.length === 0)
                 }
               >
                 Create Profile

@@ -113,15 +113,36 @@ class BrowserFarmClient {
     return data;
   }
 
+  // Shared State
+  async getState(serverId, key) {
+    const client = this.getClient(serverId);
+    const { data } = await client.get(`/state/${key}`);
+    return data;
+  }
+
+  async setState(serverId, key, value) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post(`/state/${key}`, value);
+    return data;
+  }
+
+  async deleteState(serverId, key) {
+    const client = this.getClient(serverId);
+    const { data } = await client.delete(`/state/${key}`);
+    return data;
+  }
+
   // WebSocket URLs
   getStreamUrl(serverId, profileId) {
     const server = this.servers.get(serverId);
+    if (!server) return null;
     const wsUrl = server.url.replace("http", "ws");
     return `${wsUrl}/profiles/${profileId}/stream`;
   }
 
   getControlUrl(serverId, profileId) {
     const server = this.servers.get(serverId);
+    if (!server) return null;
     const wsUrl = server.url.replace("http", "ws");
     return `${wsUrl}/profiles/${profileId}/control`;
   }

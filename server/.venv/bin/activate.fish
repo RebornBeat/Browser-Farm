@@ -33,7 +33,7 @@ end
 # Unset irrelevant variables.
 deactivate nondestructive
 
-set -gx VIRTUAL_ENV /home/rebornbeat/Projects/browser-farm/server/.venv
+set -gx VIRTUAL_ENV /home/rebornbeat/Projects/Browser-Farm/server/.venv
 
 set -gx _OLD_VIRTUAL_PATH $PATH
 set -gx PATH "$VIRTUAL_ENV/"bin $PATH

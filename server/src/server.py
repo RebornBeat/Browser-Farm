@@ -3,7 +3,7 @@ import logging
 import argparse
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 
 from .models import (
     Profile, ProfileCreate, ProfileStatus, ProfileMetrics,
-    ProxyConfig, Screenshot, Video, LogEntry, ServerHealth
+    ProxyConfig, Screenshot, Video, LogEntry, ServerHealth, ProfileMode
 )
 from .context_manager import ContextManager
 from .xvfb_manager import XvfbManager
@@ -33,6 +33,10 @@ xvfb: Optional[XvfbManager] = None
 profiles: Dict[str, Profile] = {}
 accounts_cache: Dict[str, Dict[str, dict]] = {}  # profile_id -> accounts
 
+# --- NEW GLOBAL STATE ---
+shared_state_data: Dict[str, Any] = {}  # Shared State for Inter-Profile Communication
+command_center_id: Optional[str] = None # Enforce Single Command Center
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -42,9 +46,10 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Browser Farm server...")
 
-    # Start Xvfb
+    # Initialize Xvfb Manager (Per-Profile Display Support)
     xvfb = XvfbManager()
-    xvfb.start()
+    # We don't start a global display anymore; we start them per profile.
+    # But we keep the manager instance.
 
     # Start context manager
     data_dir = Path.home() / ".browser-farm" / "data"
@@ -61,7 +66,7 @@ async def lifespan(app: FastAPI):
     if context_manager:
         await context_manager.stop()
     if xvfb:
-        xvfb.stop()
+        xvfb.stop() # Cleanup any remaining displays
 
 
 app = FastAPI(
@@ -86,6 +91,32 @@ def verify_api_key(x_api_key: Optional[str] = Header(None)):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
+
+# ---------------------------------------------------------
+# SHARED STATE ENDPOINTS (Inter-Profile Communication)
+# ---------------------------------------------------------
+
+@app.post("/state/{key}")
+async def set_shared_state(key: str, value: Dict[Any, Any], _=verify_api_key):
+    """Set a value in the shared state"""
+    shared_state_data[key] = value
+    return {"status": "ok"}
+
+@app.get("/state/{key}")
+async def get_shared_state(key: str, _=verify_api_key):
+    """Get a value from the shared state"""
+    return shared_state_data.get(key, {})
+
+@app.delete("/state/{key}")
+async def delete_shared_state(key: str, _=verify_api_key):
+    """Delete a value from the shared state"""
+    if key in shared_state_data:
+        del shared_state_data[key]
+    return {"status": "ok"}
+
+# ---------------------------------------------------------
+# CORE ENDPOINTS
+# ---------------------------------------------------------
 
 @app.get("/health", response_model=ServerHealth)
 async def health():
@@ -123,6 +154,7 @@ async def list_profiles(_=verify_api_key):
         result.append({
             "id": profile.id,
             "name": profile.name,
+            "mode": profile.mode.value, # Include mode
             "status": context_manager.get_profile_status(profile_id).value,
             "proxy_id": profile.proxy_id,
             "memory_mb": metrics.get("memory_mb", 0),
@@ -138,29 +170,39 @@ async def list_profiles(_=verify_api_key):
 @app.post("/profiles")
 async def create_profile(data: ProfileCreate, _=verify_api_key):
     """Create a new profile"""
+    global command_center_id
+
     profile_id = f"profile_{len(profiles) + 1:03d}"
+
+    # Enforce Single Command Center Constraint
+    if data.mode == ProfileMode.COMMAND_CENTER:
+        if command_center_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A Command Center profile already exists (ID: {command_center_id})"
+            )
+        command_center_id = profile_id
+        logger.info(f"Designated profile {profile_id} as Command Center.")
 
     profile = Profile(
         id=profile_id,
         name=data.name,
+        mode=data.mode,
         proxy_id=data.proxy_id,
         user_agent=data.user_agent,
         timezone=data.timezone,
         locale=data.locale,
         geolocation=data.geolocation,
-        script_code=data.script_code,
-        restart_script_code=data.restart_script_code,
+        scripts=data.scripts,          # Updated to list
+        requirements=data.requirements, # New field
         memory_threshold_mb=data.memory_threshold_mb,
         status=ProfileStatus.IDLE
     )
 
     profiles[profile_id] = profile
-
-    # Note: Accounts are provided when starting the profile
-    # For now, store empty dict
     accounts_cache[profile_id] = {}
 
-    logger.info(f"Created profile {profile_id}")
+    logger.info(f"Created profile {profile_id} (Mode: {data.mode})")
 
     return {"id": profile_id, "status": "created"}
 
@@ -177,6 +219,7 @@ async def get_profile(profile_id: str, _=verify_api_key):
     return {
         "id": profile.id,
         "name": profile.name,
+        "mode": profile.mode.value,
         "status": context_manager.get_profile_status(profile_id).value,
         "proxy_id": profile.proxy_id,
         "user_agent": profile.user_agent,
@@ -184,7 +227,8 @@ async def get_profile(profile_id: str, _=verify_api_key):
         "locale": profile.locale,
         "memory_mb": metrics.get("memory_mb", 0),
         "cpu_percent": metrics.get("cpu_percent", 0),
-        "script_code": profile.script_code,
+        "scripts": profile.scripts, # Return scripts list
+        "requirements": profile.requirements,
         "memory_threshold_mb": profile.memory_threshold_mb,
         "created_at": profile.created_at.isoformat()
     }
@@ -197,19 +241,35 @@ async def start_profile(
     _=verify_api_key
 ):
     """Start a profile"""
+    global command_center_id
+
     if profile_id not in profiles:
         raise HTTPException(status_code=404, detail="Profile not found")
 
     profile = profiles[profile_id]
     accounts_cache[profile_id] = accounts
 
+    # Double check Command Center constraint on start
+    if profile.mode == ProfileMode.COMMAND_CENTER:
+        if command_center_id and command_center_id != profile_id:
+             raise HTTPException(400, "A Command Center is already running.")
+
     # Create context if not exists
     if profile_id not in context_manager.contexts:
-        await context_manager.create_profile(profile, accounts)
+        # --- NEW: Start Dedicated Xvfb Display ---
+        try:
+            display_str = xvfb.start_display(profile_id)
+            logger.info(f"Assigned display {display_str} to profile {profile_id}")
+        except Exception as e:
+            logger.error(f"Failed to start Xvfb for {profile_id}: {e}")
+            raise HTTPException(500, "Failed to initialize virtual display")
+
+        # Pass display_str to context manager
+        await context_manager.create_profile(profile, accounts, display_str)
 
     await context_manager.start_profile(profile_id)
 
-    return {"status": "started"}
+    return {"status": "started", "display": xvfb.active_displays.get(profile_id, "unknown")}
 
 
 @app.post("/profiles/{profile_id}/pause")
@@ -225,16 +285,30 @@ async def pause_profile(profile_id: str, _=verify_api_key):
 @app.post("/profiles/{profile_id}/stop")
 async def stop_profile(profile_id: str, _=verify_api_key):
     """Stop a profile"""
+    global command_center_id
+
     if profile_id not in profiles:
         raise HTTPException(status_code=404, detail="Profile not found")
 
+    # Stop context
     await context_manager.stop_profile(profile_id)
+
+    # --- NEW: Stop Xvfb Display ---
+    xvfb.stop_display(profile_id)
+
+    # Clear Command Center tracking if this was it
+    if command_center_id == profile_id:
+        logger.info(f"Command Center {profile_id} stopped.")
+        command_center_id = None
+
     return {"status": "stopped"}
 
 
 @app.delete("/profiles/{profile_id}")
 async def delete_profile(profile_id: str, _=verify_api_key):
     """Delete a profile"""
+    global command_center_id
+
     if profile_id not in profiles:
         raise HTTPException(status_code=404, detail="Profile not found")
 
@@ -242,9 +316,17 @@ async def delete_profile(profile_id: str, _=verify_api_key):
     if profile_id in context_manager.contexts:
         await context_manager.stop_profile(profile_id)
 
+    # Cleanup Xvfb if somehow still running
+    if profile_id in xvfb.active_displays:
+        xvfb.stop_display(profile_id)
+
+    # Cleanup state
     del profiles[profile_id]
     if profile_id in accounts_cache:
         del accounts_cache[profile_id]
+
+    if command_center_id == profile_id:
+        command_center_id = None
 
     return {"status": "deleted"}
 

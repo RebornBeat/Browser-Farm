@@ -38,6 +38,7 @@ class Store {
       proxies: [],
       accounts: [],
       profiles: [],
+      scripts: [], // NEW: Script Library storage
       settings: {
         homeScreenCount: 4,
         homeScreens: [],

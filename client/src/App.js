@@ -14,6 +14,7 @@ import Proxies from "./pages/Proxies";
 import Accounts from "./pages/Accounts";
 import Profiles from "./pages/Profiles";
 import Monitoring from "./pages/Monitoring";
+import Scripts from "./pages/Scripts"; // NEW: Import Scripts Page
 
 function App() {
   const [showStartup, setShowStartup] = useState(true);
@@ -44,6 +45,8 @@ function App() {
               <Route path="/proxies" element={<Proxies />} />
               <Route path="/accounts" element={<Accounts />} />
               <Route path="/profiles" element={<Profiles />} />
+              <Route path="/scripts" element={<Scripts />} />{" "}
+              {/* NEW: Scripts Route */}
               <Route path="/monitoring/:profileId" element={<Monitoring />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

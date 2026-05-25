@@ -10,6 +10,13 @@ class ProfileStatus(str, Enum):
     PAUSED = "paused"
     STOPPED = "stopped"
     CRASHED = "crashed"
+    INSTALLING = "installing"  # New status for dependency installation phase
+
+
+class ProfileMode(str, Enum):
+    MANUAL = "manual"               # Browser only, no script execution
+    AUTOMATED = "automated"         # Standard script chain execution
+    COMMAND_CENTER = "command_center" # Orchestrator profile (Singleton per server)
 
 
 class ProxyConfig(BaseModel):
@@ -45,27 +52,43 @@ class Geolocation(BaseModel):
 class Profile(BaseModel):
     id: str
     name: str
+    mode: ProfileMode = ProfileMode.AUTOMATED  # New Field
     proxy_id: str
+
+    # Browser Configuration
     user_agent: Optional[str] = None
     timezone: str = "America/New_York"
     locale: str = "en-US"
     geolocation: Optional[Geolocation] = None
-    script_code: str
-    restart_script_code: Optional[str] = None
+
+    # Script & Execution Configuration
+    scripts: List[str] = []            # List of script code strings (Chain)
+    requirements: List[str] = []       # List of pip packages e.g. ["pyautogui", "bs4"]
+
+    # Resource Management
     memory_threshold_mb: int = 400
+
+    # State
     status: ProfileStatus = ProfileStatus.IDLE
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class ProfileCreate(BaseModel):
     name: str
+    mode: ProfileMode = ProfileMode.AUTOMATED
     proxy_id: str
+
+    # Browser Configuration
     user_agent: Optional[str] = None
     timezone: str = "America/New_York"
     locale: str = "en-US"
     geolocation: Optional[Geolocation] = None
-    script_code: str
-    restart_script_code: Optional[str] = None
+
+    # Script & Execution Configuration
+    scripts: List[str] = []
+    requirements: List[str] = []
+
+    # Resource Management
     memory_threshold_mb: int = 400
 
 
