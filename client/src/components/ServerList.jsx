@@ -1,77 +1,23 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState } from "react";
 import { Plus, Server, Trash2, CheckCircle, XCircle } from "lucide-react";
 import store from "../store/db";
 import { apiClient } from "../api/client";
+import { useServerHealth } from "../context/ServerHealthContext";
 
 function ServerList() {
-  const [servers, setServers] = useState([]);
+  // Consume Global Context
+  const { servers, healthData, refreshServers } = useServerHealth();
+
+  // Local UI State
   const [showAddModal, setShowAddModal] = useState(false);
   const [newServer, setNewServer] = useState({
     name: "",
     url: "",
     apiKey: "",
   });
-  const [serverHealth, setServerHealth] = useState({});
 
-  // ✅ USE REF TO TRACK CURRENT SERVERS
-  const serversRef = useRef([]);
-
-  useEffect(() => {
-    loadServers();
-
-    // ✅ HEALTH CHECK INTERVAL THAT USES REF
-    const interval = setInterval(() => {
-      console.log("⏰ Health check interval triggered");
-      checkHealth(serversRef.current); // Use ref instead of state
-    }, 30000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // ✅ UPDATE REF WHENEVER SERVERS CHANGE
-  useEffect(() => {
-    serversRef.current = servers;
-  }, [servers]);
-
-  const loadServers = async () => {
-    const storedServers = (await store.get("servers")) || [];
-    setServers(storedServers);
-    serversRef.current = storedServers; // ✅ Update ref immediately
-
-    // Add servers to API client
-    storedServers.forEach((server) => {
-      apiClient.addServer(server.id, server.url, server.apiKey);
-    });
-
-    // Initial health check
-    checkHealth(storedServers);
-  };
-
-  const checkHealth = async (serversToCheck) => {
-    if (!serversToCheck || serversToCheck.length === 0) {
-      console.log("⚠️ No servers to check");
-      return;
-    }
-
-    const health = {};
-
-    console.log(`🔍 Checking health for ${serversToCheck.length} server(s)`);
-
-    for (const server of serversToCheck) {
-      console.log(`📡 Pinging ${server.name} at ${server.url}`);
-      try {
-        const data = await apiClient.getHealth(server.id);
-        console.log(`✅ ${server.name} is ONLINE`);
-        health[server.id] = { status: "online", ...data };
-      } catch (error) {
-        console.error(`❌ ${server.name} is OFFLINE:`, error.message);
-        health[server.id] = { status: "offline" };
-      }
-    }
-
-    console.log("📊 Health check complete:", health);
-    setServerHealth(health);
-  };
+  // Note: We removed the local useEffect for loading servers.
+  // The Context Provider handles loading servers on app startup.
 
   const addServer = async () => {
     const server = {
@@ -80,28 +26,35 @@ function ServerList() {
       createdAt: new Date().toISOString(),
     };
 
+    // 1. Save to Store
+    // We use the current 'servers' array from context to ensure we don't overwrite
     const updatedServers = [...servers, server];
     await store.set("servers", updatedServers);
-    setServers(updatedServers);
-    serversRef.current = updatedServers; // ✅ Update ref
 
+    // 2. Register with API Client immediately
     apiClient.addServer(server.id, server.url, server.apiKey);
 
+    // 3. Sync Context State
+    // This updates the 'servers' state in Context and triggers a health check update
+    await refreshServers();
+
+    // 4. Reset UI
     setShowAddModal(false);
     setNewServer({ name: "", url: "", apiKey: "" });
-
-    // Check health immediately
-    checkHealth(updatedServers);
   };
 
   const deleteServer = async (serverId) => {
     if (!window.confirm("Are you sure you want to delete this server?")) return;
 
+    // 1. Update Store
     const updatedServers = servers.filter((s) => s.id !== serverId);
     await store.set("servers", updatedServers);
-    setServers(updatedServers);
-    serversRef.current = updatedServers; // ✅ Update ref
+
+    // 2. Remove from API Client
     apiClient.removeServer(serverId);
+
+    // 3. Sync Context State
+    await refreshServers();
   };
 
   return (
@@ -119,7 +72,8 @@ function ServerList() {
 
       <div className="grid gap-4">
         {servers.map((server) => {
-          const health = serverHealth[server.id];
+          // Access health data from context
+          const health = healthData[server.id];
           const isOnline = health?.status === "online";
 
           return (

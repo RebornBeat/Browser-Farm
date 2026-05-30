@@ -11,6 +11,7 @@ class BrowserFarmClient {
       headers: {
         "X-API-Key": apiKey,
       },
+      timeout: 10000, // 10 second timeout for all requests
     });
     this.servers.set(id, { url, apiKey, client });
   }
@@ -25,21 +26,80 @@ class BrowserFarmClient {
     return server.client;
   }
 
-  // Health
+  // -----------------------------------------------------------
+  // Health & Global Status
+  // -----------------------------------------------------------
+
+  /**
+   * Get health status of a single server.
+   * Returns health data or throws error if unreachable.
+   */
   async getHealth(serverId) {
     const client = this.getClient(serverId);
     const { data } = await client.get("/health");
     return data;
   }
 
+  /**
+   * Checks health of ALL registered servers.
+   * Used by the Global Context for polling.
+   * Returns a map: { serverId: { status: 'online'|'offline', ...data } }
+   */
+  async checkAllServersHealth() {
+    const results = {};
+    const promises = [];
+
+    for (const [serverId, server] of this.servers.entries()) {
+      promises.push(
+        this.getHealth(serverId)
+          .then((data) => {
+            results[serverId] = { status: "online", ...data };
+          })
+          .catch((error) => {
+            results[serverId] = {
+              status: "offline",
+              error: error.message || "Connection failed",
+            };
+          }),
+      );
+    }
+
+    await Promise.all(promises);
+    return results;
+  }
+
+  // -----------------------------------------------------------
+  // Command Center
+  // -----------------------------------------------------------
+
+  async getCommandCenter(serverId) {
+    const client = this.getClient(serverId);
+    try {
+      const { data } = await client.get("/command-center");
+      return data;
+    } catch (error) {
+      // If 404, no command center is running
+      if (error.response && error.response.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  // -----------------------------------------------------------
   // Proxies
+  // -----------------------------------------------------------
+
   async registerProxy(serverId, proxy) {
     const client = this.getClient(serverId);
     const { data } = await client.post("/proxies", proxy);
     return data;
   }
 
+  // -----------------------------------------------------------
   // Profiles
+  // -----------------------------------------------------------
+
   async listProfiles(serverId) {
     const client = this.getClient(serverId);
     const { data } = await client.get("/profiles");
@@ -85,7 +145,10 @@ class BrowserFarmClient {
     return data;
   }
 
+  // -----------------------------------------------------------
   // Screenshots
+  // -----------------------------------------------------------
+
   async getScreenshot(serverId, profileId) {
     const client = this.getClient(serverId);
     const response = await client.get(`/profiles/${profileId}/screen`, {
@@ -106,14 +169,20 @@ class BrowserFarmClient {
     return data;
   }
 
+  // -----------------------------------------------------------
   // Metrics
+  // -----------------------------------------------------------
+
   async getMetrics(serverId, profileId) {
     const client = this.getClient(serverId);
     const { data } = await client.get(`/profiles/${profileId}/metrics`);
     return data;
   }
 
+  // -----------------------------------------------------------
   // Shared State
+  // -----------------------------------------------------------
+
   async getState(serverId, key) {
     const client = this.getClient(serverId);
     const { data } = await client.get(`/state/${key}`);
@@ -132,7 +201,10 @@ class BrowserFarmClient {
     return data;
   }
 
+  // -----------------------------------------------------------
   // WebSocket URLs
+  // -----------------------------------------------------------
+
   getStreamUrl(serverId, profileId) {
     const server = this.servers.get(serverId);
     if (!server) return null;

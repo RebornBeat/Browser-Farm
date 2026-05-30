@@ -48,8 +48,6 @@ async def lifespan(app: FastAPI):
 
     # Initialize Xvfb Manager (Per-Profile Display Support)
     xvfb = XvfbManager()
-    # We don't start a global display anymore; we start them per profile.
-    # But we keep the manager instance.
 
     # Start context manager
     data_dir = Path.home() / ".browser-farm" / "data"
@@ -66,7 +64,7 @@ async def lifespan(app: FastAPI):
     if context_manager:
         await context_manager.stop()
     if xvfb:
-        xvfb.stop() # Cleanup any remaining displays
+        xvfb.stop_all() # Cleanup any remaining displays
 
 
 app = FastAPI(
@@ -120,7 +118,7 @@ async def delete_shared_state(key: str, _=verify_api_key):
 
 @app.get("/health", response_model=ServerHealth)
 async def health():
-    """Get server health"""
+    """Get server health and system metrics"""
     mem = get_memory_usage()
     uptime = int(time.time() - START_TIME)
 
@@ -139,14 +137,14 @@ async def health():
 
 @app.post("/proxies")
 async def register_proxy(proxy: ProxyConfig, _=verify_api_key):
-    """Register a proxy"""
+    """Register a proxy configuration"""
     context_manager.register_proxy(proxy)
     return {"status": "ok"}
 
 
 @app.get("/profiles")
 async def list_profiles(_=verify_api_key):
-    """List all profiles"""
+    """List all profiles with their status and metrics"""
     result = []
     for profile_id, profile in profiles.items():
         metrics = context_manager.get_profile_metrics(profile_id) if profile_id in context_manager.contexts else {}
@@ -154,9 +152,9 @@ async def list_profiles(_=verify_api_key):
         result.append({
             "id": profile.id,
             "name": profile.name,
-            "mode": profile.mode.value, # Include mode
+            "mode": profile.mode.value,
             "status": context_manager.get_profile_status(profile_id).value,
-            "proxy_id": profile.proxy_id,
+            "proxy_id": profile.proxy_id, # Can be None
             "memory_mb": metrics.get("memory_mb", 0),
             "cpu_percent": metrics.get("cpu_percent", 0),
             "uptime_seconds": 0,  # TODO: track uptime
@@ -184,6 +182,7 @@ async def create_profile(data: ProfileCreate, _=verify_api_key):
         command_center_id = profile_id
         logger.info(f"Designated profile {profile_id} as Command Center.")
 
+    # Create Profile Model (proxy_id can be None)
     profile = Profile(
         id=profile_id,
         name=data.name,
@@ -193,8 +192,8 @@ async def create_profile(data: ProfileCreate, _=verify_api_key):
         timezone=data.timezone,
         locale=data.locale,
         geolocation=data.geolocation,
-        scripts=data.scripts,          # Updated to list
-        requirements=data.requirements, # New field
+        scripts=data.scripts,
+        requirements=data.requirements,
         memory_threshold_mb=data.memory_threshold_mb,
         status=ProfileStatus.IDLE
     )
@@ -202,14 +201,14 @@ async def create_profile(data: ProfileCreate, _=verify_api_key):
     profiles[profile_id] = profile
     accounts_cache[profile_id] = {}
 
-    logger.info(f"Created profile {profile_id} (Mode: {data.mode})")
+    logger.info(f"Created profile {profile_id} (Mode: {data.mode}, Proxy: {data.proxy_id or 'None'})")
 
     return {"id": profile_id, "status": "created"}
 
 
 @app.get("/profiles/{profile_id}")
 async def get_profile(profile_id: str, _=verify_api_key):
-    """Get profile details"""
+    """Get detailed profile information"""
     if profile_id not in profiles:
         raise HTTPException(status_code=404, detail="Profile not found")
 
@@ -227,7 +226,7 @@ async def get_profile(profile_id: str, _=verify_api_key):
         "locale": profile.locale,
         "memory_mb": metrics.get("memory_mb", 0),
         "cpu_percent": metrics.get("cpu_percent", 0),
-        "scripts": profile.scripts, # Return scripts list
+        "scripts": profile.scripts,
         "requirements": profile.requirements,
         "memory_threshold_mb": profile.memory_threshold_mb,
         "created_at": profile.created_at.isoformat()
@@ -240,7 +239,7 @@ async def start_profile(
     accounts: Dict[str, dict],
     _=verify_api_key
 ):
-    """Start a profile"""
+    """Start a profile (Launch browser and run scripts)"""
     global command_center_id
 
     if profile_id not in profiles:
@@ -265,6 +264,7 @@ async def start_profile(
             raise HTTPException(500, "Failed to initialize virtual display")
 
         # Pass display_str to context manager
+        # context_manager handles None proxy internally
         await context_manager.create_profile(profile, accounts, display_str)
 
     await context_manager.start_profile(profile_id)

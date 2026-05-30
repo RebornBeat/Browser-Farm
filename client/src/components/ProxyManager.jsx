@@ -93,21 +93,24 @@ function ProxyManager() {
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-6">
+      {/* Header Section - Fixed Layout */}
+      <div className="flex justify-between items-center mb-6 gap-4">
         <h2 className="text-2xl font-bold text-white">Proxies</h2>
+
         <div className="flex items-center space-x-3">
           <select
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="input"
+            className="input w-auto" // Changed from default to w-auto to prevent over-expanding
           >
             <option value="all">All Proxies</option>
             <option value="active">Active Only</option>
             <option value="blacklisted">Blacklisted Only</option>
           </select>
+
           <button
             onClick={() => setShowAddModal(true)}
-            className="btn btn-primary flex items-center"
+            className="btn btn-primary flex items-center whitespace-nowrap" // Added whitespace-nowrap to keep text on one line
           >
             <Plus className="w-4 h-4 mr-2" />
             Add Proxy

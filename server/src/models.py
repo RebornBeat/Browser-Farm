@@ -10,7 +10,7 @@ class ProfileStatus(str, Enum):
     PAUSED = "paused"
     STOPPED = "stopped"
     CRASHED = "crashed"
-    INSTALLING = "installing"  # New status for dependency installation phase
+    INSTALLING = "installing"  # Status for dependency installation phase
 
 
 class ProfileMode(str, Enum):
@@ -52,8 +52,8 @@ class Geolocation(BaseModel):
 class Profile(BaseModel):
     id: str
     name: str
-    mode: ProfileMode = ProfileMode.AUTOMATED  # New Field
-    proxy_id: str
+    mode: ProfileMode = ProfileMode.AUTOMATED
+    proxy_id: Optional[str] = None  # Updated: Optional to support "No Proxy"
 
     # Browser Configuration
     user_agent: Optional[str] = None
@@ -76,7 +76,7 @@ class Profile(BaseModel):
 class ProfileCreate(BaseModel):
     name: str
     mode: ProfileMode = ProfileMode.AUTOMATED
-    proxy_id: str
+    proxy_id: Optional[str] = None  # Updated: Optional to support "No Proxy"
 
     # Browser Configuration
     user_agent: Optional[str] = None

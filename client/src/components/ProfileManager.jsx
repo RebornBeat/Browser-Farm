@@ -1,11 +1,23 @@
 import React, { useState, useEffect } from "react";
-import { Plus, Layout, Play, Pause, Square, Trash2, Code } from "lucide-react";
+import {
+  Plus,
+  Layout,
+  Play,
+  Pause,
+  Square,
+  Trash2,
+  Code,
+  Circle,
+} from "lucide-react";
 import store from "../store/db";
 import { apiClient } from "../api/client";
+import { useServerHealth } from "../context/ServerHealthContext";
 
 function ProfileManager() {
+  // Use Context for Servers and Health Data
+  const { servers, healthData } = useServerHealth();
+
   const [profiles, setProfiles] = useState([]);
-  const [servers, setServers] = useState([]);
   const [proxies, setProxies] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [scripts, setScripts] = useState([]); // Script Library
@@ -17,7 +29,7 @@ function ProfileManager() {
   const [newProfile, setNewProfile] = useState({
     name: "",
     serverId: "",
-    proxyId: "",
+    proxyId: "", // Empty string means "Select..." initially
     accountIds: [],
     userAgent: "",
     timezone: "America/New_York",
@@ -31,7 +43,7 @@ function ProfileManager() {
 
   const loadData = async () => {
     setProfiles((await store.get("profiles")) || []);
-    setServers((await store.get("servers")) || []);
+    // Servers are loaded via Context, so we remove setServers here
     setProxies((await store.get("proxies")) || []);
     setAccounts((await store.get("accounts")) || []);
     setScripts((await store.get("scripts")) || []);
@@ -40,13 +52,39 @@ function ProfileManager() {
   const createProfile = async () => {
     try {
       const server = servers.find((s) => s.id === newProfile.serverId);
-      const proxy = proxies.find((p) => p.id === newProfile.proxyId);
 
-      if (!server || !proxy) {
-        alert("Please select valid server and proxy");
+      // Basic Server Validation
+      if (!server) {
+        alert("Please select a valid server.");
         return;
       }
 
+      // --- COMMAND CENTER VALIDATION ---
+      if (profileMode === "command_center") {
+        const existingCC = profiles.find((p) => p.mode === "command_center");
+        if (existingCC) {
+          alert(
+            "A Command Center profile already exists. Only one is allowed per farm.",
+          );
+          return;
+        }
+      }
+
+      // --- PROXY VALIDATION (Optional Logic) ---
+      // If proxyId is "none" or empty, we treat it as null (No Proxy)
+      const isNoProxy =
+        newProfile.proxyId === "none" || newProfile.proxyId === "";
+      const proxy = isNoProxy
+        ? null
+        : proxies.find((p) => p.id === newProfile.proxyId);
+
+      // If user selected something that isn't "none" but we couldn't find it, error
+      if (!isNoProxy && !proxy) {
+        alert("Invalid proxy selected.");
+        return;
+      }
+
+      // Script Validation (Only for Automated/CC modes)
       if (profileMode !== "manual" && selectedScriptIds.length === 0) {
         alert(
           "Please select at least one script for Automated/Command Center modes.",
@@ -69,7 +107,7 @@ function ProfileManager() {
       const result = await apiClient.createProfile(server.id, {
         name: newProfile.name,
         mode: profileMode,
-        proxy_id: proxy.id,
+        proxy_id: proxy ? proxy.id : null, // Send null if No Proxy
         user_agent: newProfile.userAgent || undefined,
         timezone: newProfile.timezone,
         locale: newProfile.locale,
@@ -78,8 +116,10 @@ function ProfileManager() {
         memory_threshold_mb: newProfile.memoryThresholdMb,
       });
 
-      // 3. Register proxy with server
-      await apiClient.registerProxy(server.id, proxy);
+      // 3. Register proxy with server (Only if a proxy is selected)
+      if (proxy) {
+        await apiClient.registerProxy(server.id, proxy);
+      }
 
       // 4. Save locally
       const profile = {
@@ -87,6 +127,7 @@ function ProfileManager() {
         localId: `profile_${Date.now()}`,
         ...newProfile,
         mode: profileMode,
+        proxyId: proxy ? proxy.id : null, // Store null locally for clarity
         scriptIds: selectedScriptIds, // Store IDs for reference
         status: "idle",
         createdAt: new Date().toISOString(),
@@ -123,6 +164,22 @@ function ProfileManager() {
 
   const startProfile = async (profile) => {
     try {
+      // Check if trying to start a second Command Center
+      if (profile.mode === "command_center") {
+        const runningCC = profiles.find(
+          (p) =>
+            p.mode === "command_center" &&
+            p.status === "running" &&
+            p.id !== profile.id,
+        );
+        if (runningCC) {
+          alert(
+            `Cannot start: Command Center "${runningCC.name}" is already running. Only one active CC allowed.`,
+          );
+          return;
+        }
+      }
+
       // Get accounts for this profile
       const profileAccounts = {};
       profile.accountIds.forEach((accountId) => {
@@ -207,6 +264,7 @@ function ProfileManager() {
   };
 
   const getProxyName = (proxyId) => {
+    if (!proxyId) return "No Proxy (Direct)";
     const proxy = proxies.find((p) => p.id === proxyId);
     return proxy ? `${proxy.host}:${proxy.port}` : "Unknown";
   };
@@ -217,6 +275,9 @@ function ProfileManager() {
       .map((id) => scripts.find((s) => s.id === id)?.name || id)
       .join(", ");
   };
+
+  // Check if a Command Center already exists to disable option
+  const commandCenterExists = profiles.some((p) => p.mode === "command_center");
 
   return (
     <div>
@@ -381,55 +442,98 @@ function ProfileManager() {
                 >
                   <option value="manual">Manual (Browser Only)</option>
                   <option value="automated">Automated (Script Chain)</option>
-                  <option value="command_center">
-                    Command Center (Orchestrator)
+                  <option value="command_center" disabled={commandCenterExists}>
+                    Command Center (Orchestrator){" "}
+                    {commandCenterExists ? "- [Already Exists]" : ""}
                   </option>
                 </select>
+                {commandCenterExists && (
+                  <p className="text-xs text-warning-500 mt-1">
+                    A Command Center profile already exists. Delete it to create
+                    a new one.
+                  </p>
+                )}
               </div>
 
-              {/* Server & Proxy */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm text-dark-300 mb-2">
-                    Server
-                  </label>
-                  <select
-                    className="input w-full"
-                    value={newProfile.serverId}
-                    onChange={(e) =>
-                      setNewProfile({ ...newProfile, serverId: e.target.value })
-                    }
-                  >
-                    <option value="">Select server</option>
-                    {servers.map((server) => (
-                      <option key={server.id} value={server.id}>
-                        {server.name}
+              {/* Server Selection (Updated UI with Status) */}
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Server
+                </label>
+                <div className="space-y-2 bg-dark-900 p-3 rounded-lg max-h-48 overflow-y-auto">
+                  {servers.length === 0 && (
+                    <p className="text-dark-500 text-sm text-center py-2">
+                      No servers added.
+                    </p>
+                  )}
+                  {servers.map((server) => {
+                    const isOnline = healthData[server.id]?.status === "online";
+                    return (
+                      <label
+                        key={server.id}
+                        className="flex items-center justify-between p-2 bg-dark-800 rounded cursor-pointer hover:bg-dark-700"
+                      >
+                        <div className="flex items-center space-x-3">
+                          <input
+                            type="radio"
+                            name="server"
+                            value={server.id}
+                            checked={newProfile.serverId === server.id}
+                            onChange={() =>
+                              setNewProfile({
+                                ...newProfile,
+                                serverId: server.id,
+                              })
+                            }
+                            className="form-radio"
+                          />
+                          <span className="text-white">{server.name}</span>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Circle
+                            className={`w-3 h-3 ${
+                              isOnline
+                                ? "fill-success-500 text-success-500"
+                                : "fill-error-500 text-error-500"
+                            }`}
+                          />
+                          <span
+                            className={`text-xs ${
+                              isOnline ? "text-success-500" : "text-error-500"
+                            }`}
+                          >
+                            {isOnline ? "Online" : "Offline"}
+                          </span>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Proxy Selection */}
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Proxy
+                </label>
+                <select
+                  className="input w-full"
+                  value={newProfile.proxyId}
+                  onChange={(e) =>
+                    setNewProfile({ ...newProfile, proxyId: e.target.value })
+                  }
+                >
+                  <option value="">Select proxy option</option>
+                  <option value="none">No Proxy (Direct Connection)</option>
+                  {/* Only show non-blacklisted proxies */}
+                  {proxies
+                    .filter((p) => !p.blacklisted)
+                    .map((proxy) => (
+                      <option key={proxy.id} value={proxy.id}>
+                        {proxy.host}:{proxy.port} ({proxy.country})
                       </option>
                     ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm text-dark-300 mb-2">
-                    Proxy
-                  </label>
-                  <select
-                    className="input w-full"
-                    value={newProfile.proxyId}
-                    onChange={(e) =>
-                      setNewProfile({ ...newProfile, proxyId: e.target.value })
-                    }
-                  >
-                    <option value="">Select proxy</option>
-                    {proxies
-                      .filter((p) => !p.blacklisted)
-                      .map((proxy) => (
-                        <option key={proxy.id} value={proxy.id}>
-                          {proxy.host}:{proxy.port} ({proxy.country})
-                        </option>
-                      ))}
-                  </select>
-                </div>
+                </select>
               </div>
 
               {/* Script Selection (Conditional) */}
@@ -609,7 +713,6 @@ function ProfileManager() {
                 disabled={
                   !newProfile.name ||
                   !newProfile.serverId ||
-                  !newProfile.proxyId ||
                   (profileMode !== "manual" && selectedScriptIds.length === 0)
                 }
               >

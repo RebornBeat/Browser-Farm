@@ -188,13 +188,23 @@ class ScriptRunner:
             # Prepare injected functions
             injected_get_account = _create_get_account_function(self.accounts)
 
-            # Import external libraries for injection (fail if not installed, but requirements should have handled it)
+            # Prepare external libraries for injection
+            # We initialize as None, then attempt import.
+            # This prevents NameError if requirements were not set but script doesn't use them.
+            _pyautogui = None
+            _BeautifulSoup = None
+
             try:
                 import pyautogui
+                _pyautogui = pyautogui
+            except ImportError:
+                pass # User script might not need it
+
+            try:
                 from bs4 import BeautifulSoup
-            except ImportError as e:
-                script_logger.error(f"Missing library for injection: {e}. Ensure requirements are set.")
-                # Attempt to proceed without them, scripts might not need them.
+                _BeautifulSoup = BeautifulSoup
+            except ImportError:
+                pass
 
             # Execute Script Chain
             for i, script_code in enumerate(self.scripts):
@@ -218,8 +228,8 @@ class ScriptRunner:
                     "set_state": _set_shared_state,
 
                     # External Libraries (Injected)
-                    "pyautogui": pyautogui if 'pyautogui' in globals() else None,
-                    "BeautifulSoup": BeautifulSoup if 'BeautifulSoup' in globals() else None,
+                    "pyautogui": _pyautogui,
+                    "BeautifulSoup": _BeautifulSoup,
 
                     # Standard Libs
                     "asyncio": asyncio,

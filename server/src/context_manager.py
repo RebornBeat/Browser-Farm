@@ -75,7 +75,7 @@ class ContextManager:
         Workflow:
         1. Allocate a dedicated Xvfb display.
         2. Launch a dedicated Chromium process bound to that display.
-        3. Create a Browser Context with Proxy & Geolocation settings.
+        3. Create a Browser Context with Proxy (Optional) & Geolocation settings.
         4. Inject Stealth Scripts to mask automation signatures.
         5. Initialize Script Runner and Resource Monitors.
         """
@@ -92,25 +92,33 @@ class ContextManager:
 
         # --- 2. Process Launch: Dedicated Browser ---
         browser: Optional[Browser] = None
+        browser_pid: Optional[int] = None
+
         try:
-            # Configure Proxy Settings
+            # --- UPDATE: Optional Proxy Logic ---
             proxy_config = None
-            if profile.proxy_id and profile.proxy_id in self.proxies:
-                p = self.proxies[profile.proxy_id]
-                proxy_config = {
-                    "server": f"{p.protocol}://{p.host}:{p.port}",
-                    "username": p.username,
-                    "password": p.password,
-                }
-                logger.info(f"[{profile.id}] Using proxy: {p.host}:{p.port}")
-            elif profile.proxy_id:
-                logger.warning(f"[{profile.id}] Proxy ID {profile.proxy_id} not found. Proceeding without proxy.")
+            if profile.proxy_id:
+                # User selected a specific proxy
+                if profile.proxy_id in self.proxies:
+                    p = self.proxies[profile.proxy_id]
+                    proxy_config = {
+                        "server": f"{p.protocol}://{p.host}:{p.port}",
+                        "username": p.username,
+                        "password": p.password,
+                    }
+                    logger.info(f"[{profile.id}] Using proxy: {p.host}:{p.port}")
+                else:
+                    # Proxy ID provided but not found in registry
+                    logger.warning(f"[{profile.id}] Proxy ID {profile.proxy_id} not found. Proceeding without proxy.")
+            else:
+                # No proxy selected (None)
+                logger.info(f"[{profile.id}] No proxy selected. Running direct connection.")
 
             # Launch Browser Instance
             # Note: We launch one browser per profile to ensure thread-safe PyAutoGUI usage on specific displays.
             browser = await self.playwright.chromium.launch(
                 headless=False,  # Must be headful for Xvfb/PyAutoGUI rendering
-                proxy=proxy_config,
+                proxy=proxy_config, # Playwright handles None correctly (Direct connection)
                 args=[
                     "--disable-blink-features=AutomationControlled",  # Mask Chrome automation flags
                     "--no-sandbox",
@@ -122,6 +130,13 @@ class ContextManager:
                 env={"DISPLAY": display_str} # Critical: Bind browser to specific display
             )
             self.browsers[profile.id] = browser
+
+            # --- CRITICAL: Extract PID for Memory Monitor ---
+            # The .process() method returns a Popen object wrapping the browser process
+            browser_process = browser.process()
+            if browser_process:
+                browser_pid = browser_process.pid
+                logger.info(f"[{profile.id}] Browser PID: {browser_pid}")
 
         except Exception as e:
             logger.error(f"[{profile.id}] Browser launch failed: {e}")
@@ -197,14 +212,15 @@ class ContextManager:
         )
         self.runners[profile.id] = runner
 
-        # Memory Monitor
+        # Memory Monitor (Now passing browser_pid for accurate tracking)
         monitor = MemoryMonitor(
             profile_id=profile.id,
             context=context,
             threshold_mb=profile.memory_threshold_mb,
             on_threshold_exceeded=lambda: asyncio.create_task(
                 self.restart_profile(profile.id, profile, accounts)
-            )
+            ),
+            browser_pid=browser_pid # Pass the PID here
         )
         self.monitors[profile.id] = monitor
 

@@ -38,7 +38,8 @@ class Store {
       proxies: [],
       accounts: [],
       profiles: [],
-      scripts: [], // NEW: Script Library storage
+      scripts: [], // Script Library storage
+      activeCommandCenterId: null, // NEW: Track the active Command Center profile ID
       settings: {
         homeScreenCount: 4,
         homeScreens: [],

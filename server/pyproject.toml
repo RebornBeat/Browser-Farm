@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "browser-farm"
-version = "0.1.3"  # Bumped version
+version = "0.1.4"  # Bumped version
 description = "A distributed browser automation platform for developers. Manage multiple browser contexts across multiple servers with live monitoring, manual control, and custom scripts."
 readme = "README.md"
 license = {text = "MIT"}
