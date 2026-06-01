@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -20,6 +20,8 @@ class ProfileMode(str, Enum):
 
 
 class ProxyConfig(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     host: str
     port: int
@@ -30,6 +32,8 @@ class ProxyConfig(BaseModel):
 
 class Account(BaseModel):
     """Account credentials for automation"""
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     platform: str
     platform_url: Optional[str] = None
@@ -50,6 +54,8 @@ class Geolocation(BaseModel):
 
 
 class Profile(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     name: str
     mode: ProfileMode = ProfileMode.AUTOMATED

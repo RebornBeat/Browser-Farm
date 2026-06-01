@@ -37,16 +37,67 @@ function ProfileManager() {
     memoryThresholdMb: 400,
   });
 
+  // Load data initially AND when servers context updates (to allow syncing)
   useEffect(() => {
     loadData();
-  }, []);
+  }, [servers]);
 
   const loadData = async () => {
-    setProfiles((await store.get("profiles")) || []);
-    // Servers are loaded via Context, so we remove setServers here
+    // 1. Load Local Data
+    const localProfiles = (await store.get("profiles")) || [];
     setProxies((await store.get("proxies")) || []);
     setAccounts((await store.get("accounts")) || []);
     setScripts((await store.get("scripts")) || []);
+
+    // 2. Sync with Server (Crash Recovery / State Reconciliation)
+    // If the server restarted, profiles might be 'stopped' on server but 'running' locally.
+    // We merge server truth into local state.
+
+    // Create a mutable copy to update
+    let syncedProfiles = [...localProfiles];
+    let needsDbUpdate = false;
+
+    if (servers && servers.length > 0) {
+      for (const server of servers) {
+        try {
+          // Fetch profiles known by this server
+          const serverProfiles = await apiClient.listProfiles(server.id);
+          const serverMap = new Map(serverProfiles.map((p) => [p.id, p]));
+
+          // Update local profiles that belong to this server
+          syncedProfiles = syncedProfiles.map((p) => {
+            if (p.serverId === server.id) {
+              const serverVersion = serverMap.get(p.id);
+              // If server knows about it, take its status
+              if (serverVersion) {
+                if (p.status !== serverVersion.status) {
+                  needsDbUpdate = true;
+                  return { ...p, status: serverVersion.status };
+                }
+              } else {
+                // If server DOES NOT know about it (DB reset), mark as stopped or log warning.
+                // For now, we mark stopped so user can delete or restart.
+                if (p.status !== "stopped" && p.status !== "idle") {
+                  needsDbUpdate = true;
+                  return { ...p, status: "stopped" };
+                }
+              }
+            }
+            return p;
+          });
+        } catch (error) {
+          console.warn(
+            `Failed to sync profiles for server ${server.name}:`,
+            error,
+          );
+        }
+      }
+    }
+
+    setProfiles(syncedProfiles);
+    if (needsDbUpdate) {
+      await store.set("profiles", syncedProfiles);
+    }
   };
 
   const createProfile = async () => {
@@ -247,15 +298,23 @@ function ProfileManager() {
       return;
 
     try {
+      // Attempt to delete from server
       await apiClient.deleteProfile(profile.serverId, profile.id);
-
-      const updatedProfiles = profiles.filter((p) => p.id !== profile.id);
-      await store.set("profiles", updatedProfiles);
-      setProfiles(updatedProfiles);
     } catch (error) {
-      console.error("Failed to delete profile:", error);
-      alert("Failed to delete profile: " + error.message);
+      console.warn("Server delete failed (might be ghost profile):", error);
+      // If 404, it means the server restarted and profile is already gone.
+      // We proceed to clear local cache.
+      // Only alert if it's a different error (like 500 or network)
+      if (!error.message.includes("404")) {
+        alert("Failed to delete profile: " + error.message);
+        return;
+      }
     }
+
+    // Always remove locally if server delete succeeded OR if server returned 404
+    const updatedProfiles = profiles.filter((p) => p.id !== profile.id);
+    await store.set("profiles", updatedProfiles);
+    setProfiles(updatedProfiles);
   };
 
   const getServerName = (serverId) => {

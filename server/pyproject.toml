@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "browser-farm"
-version = "0.1.4"  # Bumped version
+version = "0.1.6"  # Bumped version for DB integration
 description = "A distributed browser automation platform for developers. Manage multiple browser contexts across multiple servers with live monitoring, manual control, and custom scripts."
 readme = "README.md"
 license = {text = "MIT"}
@@ -21,6 +21,12 @@ dependencies = [
     "websockets>=12.0",
     "aiofiles>=23.2.1",
     "pillow>=10.2.0",
+    "aiohttp>=3.9.0",  # Added for Shared State API helpers
+
+    # --- Database Dependencies ---
+    "sqlalchemy[asyncio]>=2.0.0", # ORM with async support
+    "asyncpg>=0.29.0",            # PostgreSQL async driver
+    "greenlet>=3.0.0",            # Required for SQLAlchemy async context
 ]
 
 # This creates the "browser-farm" command line tool

@@ -25,7 +25,8 @@ class XvfbManager:
 
         # Per-Profile Management
         # Structure: { profile_id: (process_handle, display_number) }
-        self.managed_displays: Dict[str, Tuple[subprocess.Popen, int]] = {}
+        # FIXED: Renamed from managed_displays to active_displays to match server.py
+        self.active_displays: Dict[str, Tuple[subprocess.Popen, int]] = {}
 
         # Track used display numbers to find available slots quickly
         self._used_display_numbers: set = set()
@@ -102,8 +103,8 @@ class XvfbManager:
             The display string (e.g., ":100") to be used for this profile.
         """
         # 1. Check if this profile already has a display
-        if profile_id in self.managed_displays:
-            proc, display_num = self.managed_displays[profile_id]
+        if profile_id in self.active_displays:
+            proc, display_num = self.active_displays[profile_id]
             display_str = f":{display_num}"
             logger.info(f"Reusing existing display {display_str} for profile {profile_id}")
             return display_str
@@ -114,6 +115,17 @@ class XvfbManager:
 
         try:
             logger.info(f"Allocating display {display_str} for profile {profile_id}...")
+
+            # --- NEW: CLEANUP STALE LOCK FILES ---
+            # This fixes the "Xvfb failed to start" error caused by leftover lock files
+            lock_file = f"/tmp/.X{display_num}-lock"
+            if os.path.exists(lock_file):
+                logger.warning(f"Removing stale Xvfb lock file: {lock_file}")
+                try:
+                    os.remove(lock_file)
+                except OSError as e:
+                    logger.error(f"Failed to remove lock file: {e}")
+            # -------------------------------------
 
             # 3. Launch Xvfb
             cmd = [
@@ -129,16 +141,22 @@ class XvfbManager:
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.PIPE # Capture stderr to debug if it fails
             )
 
             # 4. Wait and verify
             time.sleep(1)
             if not self._is_running(display_str):
-                raise RuntimeError(f"Xvfb failed to start on {display_str}")
+                # Try to read stderr if available
+                stderr_output = ""
+                try:
+                    stderr_output = proc.stderr.read().decode()
+                except:
+                    pass
+                raise RuntimeError(f"Xvfb failed to start on {display_str}. Stderr: {stderr_output}")
 
             # 5. Register
-            self.managed_displays[profile_id] = (proc, display_num)
+            self.active_displays[profile_id] = (proc, display_num)
             self._used_display_numbers.add(display_num)
 
             logger.info(f"✓ Xvfb started on {display_str} for profile {profile_id}")
@@ -155,11 +173,11 @@ class XvfbManager:
         """
         Stops the Xvfb display associated with a specific profile.
         """
-        if profile_id not in self.managed_displays:
+        if profile_id not in self.active_displays:
             logger.warning(f"No managed display found for profile {profile_id}")
             return
 
-        proc, display_num = self.managed_displays[profile_id]
+        proc, display_num = self.active_displays[profile_id]
         display_str = f":{display_num}"
 
         try:
@@ -171,7 +189,7 @@ class XvfbManager:
             logger.error(f"Error stopping display for {profile_id}: {e}")
         finally:
             # Cleanup references
-            del self.managed_displays[profile_id]
+            del self.active_displays[profile_id]
             if display_num in self._used_display_numbers:
                 self._used_display_numbers.remove(display_num)
             logger.info(f"✓ Xvfb stopped on {display_str} for profile {profile_id}")
@@ -212,7 +230,7 @@ class XvfbManager:
         """Stops all managed displays and the global instance."""
         # Stop all profile-specific displays
         # Convert to list to avoid modification during iteration
-        for profile_id in list(self.managed_displays.keys()):
+        for profile_id in list(self.active_displays.keys()):
             self.stop_display(profile_id)
 
         # Stop global

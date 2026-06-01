@@ -5,6 +5,7 @@ A distributed browser automation platform for developers. Manage multiple browse
 ## Features
 
 - 🖥️ **Multi-Server Management** - Connect and manage multiple automation servers
+- 🗄️ **Persistent Storage** - PostgreSQL database backing for profiles, ensuring state survives restarts
 - 🌐 **Proxy Management** - Global proxy pool with per-site blacklisting
 - 👤 **Account Vault** - Centralized credential management for automation
 - 🤖 **Flexible Profile Modes** - Manual, Automated, or Command Center (Orchestrator) profiles
@@ -17,7 +18,7 @@ A distributed browser automation platform for developers. Manage multiple browse
 - 🖱️ **Human-like Automation** - Native PyAutoGUI support via isolated virtual displays
 - 🕵️ **Anti-Detection** - Automatic injection of stealth scripts to hide automation flags
 - 📸 **Screenshots & Videos** - Automatic capture and gallery viewing
-- 📊 **Resource Monitoring** - Memory, CPU, and network metrics per context
+- 📊 **Resource Monitoring** - Non-blocking memory, CPU, and network metrics per context
 - 🔄 **Auto-Dependency Install** - Scripts can define requirements installed at runtime
 
 ## Architecture
@@ -26,6 +27,8 @@ A distributed browser automation platform for developers. Manage multiple browse
 Desktop App (Electron + React)
     ↓ Management & Configuration
 Server (Python + FastAPI + Playwright)
+    ↓ State & Persistence
+PostgreSQL Database
     ↓ Isolated Xvfb Display Per Profile
 Chromium Browser (Stealth Injected)
     ↓ Script Chain Execution
@@ -34,28 +37,49 @@ Your Custom Scripts (Playwright + PyAutoGUI)
 
 ## Installation
 
-### Server Setup
+### Prerequisites
 
-**1. Install system dependencies:**
+1.  **PostgreSQL Database**: You need a running PostgreSQL instance.
+2.  **System Dependencies**: Xvfb, Chromium, and Python build tools.
+
+### Step 1: System Dependencies
+
 ```bash
 sudo apt update
-sudo apt install -y python3.10-venv python3-pip xvfb chromium-browser
+sudo apt install -y python3.10-venv python3-pip xvfb chromium-browser postgresql postgresql-contrib libpq-dev
 ```
 
-**2. Create installation directory:**
+### Step 2: Database Setup
+
+Create a dedicated database and user for Browser Farm.
+
+```bash
+# Switch to postgres user
+sudo -u postgres psql
+
+# In the SQL prompt:
+CREATE USER browser_farm_user WITH PASSWORD 'your_secure_password';
+CREATE DATABASE browser_farm_db OWNER browser_farm_user;
+GRANT ALL PRIVILEGES ON DATABASE browser_farm_db TO browser_farm_user;
+\q
+```
+
+### Step 3: Server Installation
+
+**1. Create installation directory:**
 ```bash
 sudo mkdir -p /opt/browser-farm
 cd /opt/browser-farm
 ```
 
-**3. Create Virtual Environment & Install Package:**
+**2. Create Virtual Environment:**
 ```bash
-# Create virtual environment
 python3 -m venv venv
-
-# Activate it
 source venv/bin/activate
+```
 
+**3. Install Package:**
+```bash
 # Install from PyPI
 pip install browser-farm
 
@@ -63,12 +87,26 @@ pip install browser-farm
 playwright install chromium
 ```
 
-**4. Manual Run (Testing):**
+### Step 4: Configuration (Environment Variables)
+
+The server requires the Database URL to start. You can set this in your environment or a `.env` file.
+
+**Create `.env` file:**
 ```bash
-python -m browser_farm.server --host 0.0.0.0 --port 8080
+nano /opt/browser-farm/.env
 ```
 
-### Production Deployment (Systemd)
+**Add the following content:**
+```ini
+# Database Connection String
+DATABASE_URL="postgresql+asyncpg://browser_farm_user:your_secure_password@localhost/browser_farm_db"
+
+# Optional: Override default port
+# PORT=8080
+# HOST=0.0.0.0
+```
+
+### Step 5: Production Deployment (Systemd)
 
 To run the server 24/7 with automatic restarts, use Systemd.
 
@@ -81,13 +119,15 @@ sudo nano /etc/systemd/system/browser-farm.service
 ```ini
 [Unit]
 Description=Browser Farm Server
-After=network.target
+After=network.target postgresql.service
 
 [Service]
 Type=simple
 User=root
 # Required for Xvfb and Headful browsers
 Environment="DISPLAY=:99"
+# Load Environment Variables from .env file
+EnvironmentFile=/opt/browser-farm/.env
 WorkingDirectory=/opt/browser-farm
 # Activate venv and run server
 ExecStart=/opt/browser-farm/venv/bin/python -m browser_farm.server --host 0.0.0.0 --port 8080
@@ -110,10 +150,33 @@ sudo systemctl start browser-farm
 # Check if running
 sudo systemctl status browser-farm
 
-# View logs to find your generated API Key
+# View logs to find your generated API Key and confirm DB connection
 sudo journalctl -u browser-farm -f
 ```
-*Look for the line: `✓ API Key: bf_...`*
+*Look for:*
+*   `Database tables created/verified.`
+*   `✓ API Key: bf_...`
+
+## Updating the Server
+
+When a new version is released:
+
+```bash
+# 1. Stop the service
+sudo systemctl stop browser-farm
+
+# 2. Activate venv
+cd /opt/browser-farm
+source venv/bin/activate
+
+# 3. Upgrade package
+pip install --upgrade browser-farm
+
+# 4. Start the service
+sudo systemctl start browser-farm
+```
+
+*Note: The server automatically handles database schema synchronization on startup for minor updates.*
 
 ### Client Setup
 
@@ -138,41 +201,31 @@ npm run dist
 2. **Add a server:**
    - Click "Add Server" in the Servers tab
    - Enter server URL: `http://192.168.1.100:8080`
-   - Enter API key: `bf_abc123xyz789`
+   - Enter API key: (Found in server logs)
    - Click "Connect"
 
 3. **Add a proxy:**
-   - Go to Proxies tab
-   - Click "Add Proxy"
-   - Enter proxy details
-   - Save
+   - Go to Proxies tab -> "Add Proxy"
+   - Enter details. (Optional: Can be skipped for Direct Connection).
 
-4. **Add an account:**
-   - Go to Accounts tab
-   - Click "Add Account"
-   - Enter credentials (stored locally, not encrypted)
-   - Save
-
-5. **Create scripts:**
-   - Go to the new **Script Library** tab.
-   - Create modular scripts (e.g., "Instagram Login", "Scraper", "Logout").
+4. **Create scripts:**
+   - Go to the **Script Library** tab.
+   - Create modular scripts (e.g., "Instagram Login").
    - Define requirements (e.g., `pyautogui`, `bs4`).
 
-6. **Create a profile:**
-   - Go to Profiles tab
-   - Click "New Profile"
+5. **Create a profile:**
+   - Go to Profiles tab -> "New Profile"
    - **Select Mode:**
-     - **Manual:** Opens a browser with proxy. No script. You control it via VNC/Stream.
+     - **Manual:** Opens a browser with proxy. No script.
      - **Automated:** Runs a chain of scripts.
-     - **Command Center:** A special profile to orchestrate other profiles.
-   - Select Server & Proxy.
-   - **Attach Scripts:** Select one or more scripts from your Library to run in sequence.
+     - **Command Center:** Orchestrates other profiles.
+   - Select Server & Proxy (or "No Proxy").
+   - **Attach Scripts:** Select scripts to run in sequence.
    - Click "Save & Start"
 
-7. **Monitor:**
-   - Go to Home to see live screens
-   - Click any screen to view details
-   - Click "Take Control" for manual operation
+6. **Monitor:**
+   - Go to Home to see live screens.
+   - Click "Take Control" for manual operation.
 
 ## Writing Scripts
 
@@ -196,13 +249,12 @@ If your script requires external libraries, list them in the **"Requirements"** 
 
 ### Example 1: Automation with Script Chaining & Shared State
 
-**Script 1: Login (Instagram Login)**
-*Requirements: none*
+**Script 1: Login**
 ```python
 import asyncio
 
 async def main(context):
-    account = get_account("acc_001") # Get credentials
+    account = get_account("acc_001")
     page = await context.new_page()
     await page.goto("https://instagram.com/accounts/login/")
 
@@ -210,42 +262,33 @@ async def main(context):
     await page.fill('input[name="password"]', account['password'])
     await page.click('button[type="submit"]')
 
-    await page.wait_for_url("https://instagram.com/")
-
-    # Signal to other profiles that we are logged in
-    await set_state("insta_status", {"logged_in": True, "user": account['username']})
+    # Signal to other profiles
+    await set_state("insta_status", {"logged_in": True})
 ```
 
-**Script 2: Scraper (Instagram Scraper)**
+**Script 2: Scraper**
 *Requirements: beautifulsoup4*
 ```python
 import asyncio
-from bs4 import BeautifulSoup # Injected, but can also be imported if installed
 
 async def main(context):
-    # Check if login script finished
+    # Check state from previous script
     status = await get_state("insta_status")
     if not status.get("logged_in"):
         print("Not logged in!")
         return
 
-    page = context.pages[0] # Reuse page from previous script
-    await page.goto("https://instagram.com/explore/")
-
-    # Parse content
-    content = await page.content()
-    soup = BeautifulSoup(content, 'html.parser')
-    print(f"Found {len(soup.find_all('a'))} links")
+    page = context.pages[0]
+    # ... scraping logic ...
 ```
 
 ### Example 2: Human-like Interaction with PyAutoGUI
 
 *Requirements: pyautogui*
-*Note: PyAutoGUI controls the mouse on the virtual display assigned to this profile. It does not interfere with other profiles.*
 
 ```python
 import asyncio
-import pyautogui # Available in namespace
+import pyautogui
 
 async def main(context):
     page = await context.new_page()
@@ -256,40 +299,14 @@ async def main(context):
     box = await button.bounding_box()
 
     if box:
-        # Move mouse human-like using PyAutoGUI
         center_x = box['x'] + box['width'] / 2
         center_y = box['y'] + box['height'] / 2
 
-        print(f"Moving mouse to {center_x}, {center_y}")
+        # Move mouse human-like
         pyautogui.moveTo(center_x, center_y, duration=1.0)
         pyautogui.click()
 
-        print("Clicked using PyAutoGUI!")
-
     await asyncio.sleep(5)
-```
-
-### Example 3: Command Center Script
-
-A "Command Center" profile runs a script that manages other profiles or global logic. It typically does not require a browser context.
-
-```python
-import asyncio
-
-async def main(context):
-    print("Command Center Active")
-
-    while True:
-        # Check global state
-        farm_health = await get_state("farm_health_metrics")
-
-        if farm_health and farm_health.get("cpu_avg") > 80:
-            print("High CPU! Pausing non-essential profiles...")
-            # Logic to call API to pause profiles would go here
-            # Or send a signal via shared state
-            await set_state("command", "throttle")
-
-        await asyncio.sleep(60)
 ```
 
 ## API Documentation
@@ -300,6 +317,7 @@ See [API.md](./API.md) for full API reference.
 
 ### Server
 - Ubuntu 20.04+ or Debian 11+
+- PostgreSQL 12+
 - 4GB RAM minimum (8GB recommended)
 - 2 CPU cores minimum
 - 10GB disk space
@@ -314,6 +332,9 @@ See [API.md](./API.md) for full API reference.
 ### Server
 ```bash
 cd server
+# Create local .env
+echo "DATABASE_URL=postgresql+asyncpg://user:pass@localhost/db" > .env
+
 pip install -e .
 python -m browser_farm.server --dev
 ```
@@ -333,8 +354,6 @@ This software is provided "as is", without warranty of any kind. The developers 
 
 Users are solely responsible for ensuring their usage of this software complies with all applicable laws and third-party agreements. Use of this tool to automate websites that explicitly forbid automation is done at the user's own risk.
 
-Features like PyAutoGUI integration and browser fingerprint masking are intended for advanced testing scenarios and privacy preservation.
-
 ## License
 
 MIT License - see [LICENSE](./LICENSE)
@@ -342,14 +361,12 @@ MIT License - see [LICENSE](./LICENSE)
 ## Support
 
 - GitHub Issues: [Issues](https://github.com/RebornBeat/browser-farm/issues)
-- Discord: [Join Server](https://discord.gg/browserfarm)
 
 ## Roadmap
 
 - [x] Script Library & Chaining
 - [x] Inter-Profile Communication
 - [x] PyAutoGUI Support
-- [x] Command Center Mode
+- [x] PostgreSQL Persistence
 - [ ] Docker support
-- [ ] Kubernetes orchestration
 - [ ] LLM Orchestrator Integration
