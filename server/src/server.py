@@ -21,7 +21,7 @@ from .xvfb_manager import XvfbManager
 from .vnc_handler import VNCHandler
 from .utils import generate_api_key, get_memory_usage, get_cached_cpu_usage
 
-# Database Imports (To be created)
+# Database Imports
 from .database import get_db, init_db, AsyncSessionLocal
 from .models_db import DbProfile
 
@@ -157,7 +157,7 @@ async def health():
         status="online",
         version="1.0.0",
         max_contexts=20,
-        current_contexts=len(context_manager.contexts), # Live count from memory
+        current_contexts=len(context_manager.contexts),
         memory_total_mb=mem["total_mb"],
         memory_used_mb=mem["used_mb"],
         memory_available_mb=mem["available_mb"],
@@ -304,8 +304,15 @@ async def start_profile(
 
     # Create context if not exists
     if profile_id not in context_manager.contexts:
+        # --- FIX: Run Xvfb start in a thread to prevent blocking the server ---
+        loop = asyncio.get_event_loop()
         try:
-            display_str = xvfb.start_display(profile_id)
+            # Run the synchronous Xvfb start in an executor (thread)
+            display_str = await loop.run_in_executor(
+                None,
+                xvfb.start_display,
+                profile_id
+            )
             logger.info(f"Assigned display {display_str} to profile {profile_id}")
         except Exception as e:
             logger.error(f"Failed to start Xvfb for {profile_id}: {e}")
@@ -314,7 +321,25 @@ async def start_profile(
             raise HTTPException(500, "Failed to initialize virtual display")
 
         # Convert DB profile to Pydantic for context manager compatibility
-        profile_pydantic = Profile.from_orm(profile) # Or construct manually if needed
+        # Using model_validate (Pydantic v2) or from_orm (v1) depending on setup
+        # We construct manually here to be safe across versions
+        profile_data = {
+            "id": profile.id,
+            "name": profile.name,
+            "mode": profile.mode,
+            "proxy_id": profile.proxy_id,
+            "user_agent": profile.user_agent,
+            "timezone": profile.timezone,
+            "locale": profile.locale,
+            "geolocation": profile.geolocation,
+            "scripts": profile.scripts,
+            "requirements": profile.requirements,
+            "memory_threshold_mb": profile.memory_threshold_mb,
+            "status": profile.status,
+            "created_at": profile.created_at
+        }
+        profile_pydantic = Profile(**profile_data)
+
         await context_manager.create_profile(profile_pydantic, accounts, display_str)
     else:
         info = xvfb.active_displays.get(profile_id)

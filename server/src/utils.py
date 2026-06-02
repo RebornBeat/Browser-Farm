@@ -91,3 +91,10 @@ def get_cpu_usage() -> float:
     Returns cached data updated by background thread.
     """
     return _cached_stats["cpu_percent"]
+
+# Alias for compatibility with server.py imports
+def get_cached_cpu_usage() -> float:
+    """
+    Alias for get_cpu_usage to match server.py imports.
+    """
+    return get_cpu_usage()

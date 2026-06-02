@@ -1,10 +1,8 @@
-from sqlalchemy import Column, String, Integer, DateTime, Enum, ForeignKey
+from sqlalchemy import Column, String, Integer, DateTime, Enum
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
+from .database import Base  # UPDATED: Import shared Base from database.py
 import enum
-
-Base = declarative_base()
 
 # -----------------------------------------------
 # Enums (Mirror Pydantic models)
@@ -27,7 +25,7 @@ class ProfileModeDB(str, enum.Enum):
 # Models
 # -----------------------------------------------
 
-class ProfileModel(Base):
+class DbProfile(Base):  # FIXED: Renamed from ProfileModel to DbProfile to match server.py import
     """
     SQL Table for Profiles.
     Replaces the in-memory 'profiles' dictionary.
@@ -49,8 +47,8 @@ class ProfileModel(Base):
     geolocation = Column(JSONB, nullable=True) # Stores {"lat": float, "lng": float}
 
     # Execution Config (Stored as JSONB arrays)
-    scripts = Column(JSONB, default=list)       # List of script code strings
-    requirements = Column(JSONB, default=list)  # List of pip package strings
+    scripts = Column(JSONB, default=[])       # List of script code strings
+    requirements = Column(JSONB, default=[])  # List of pip package strings
 
     # Resource Management
     memory_threshold_mb = Column(Integer, default=400)
@@ -82,8 +80,8 @@ class ProxyModel(Base):
 
     # Metadata
     country = Column(String, nullable=True)
-    blacklisted = Column(String, default=False) # Storing as string/bool depending on dialect, bool is fine
-    blacklisted_sites = Column(JSONB, default=list)
+    blacklisted = Column(String, default=False) # Storing as string/bool depending on dialect
+    blacklisted_sites = Column(JSONB, default=[])
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

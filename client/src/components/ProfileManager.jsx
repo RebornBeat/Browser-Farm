@@ -301,17 +301,15 @@ function ProfileManager() {
       // Attempt to delete from server
       await apiClient.deleteProfile(profile.serverId, profile.id);
     } catch (error) {
-      console.warn("Server delete failed (might be ghost profile):", error);
-      // If 404, it means the server restarted and profile is already gone.
-      // We proceed to clear local cache.
-      // Only alert if it's a different error (like 500 or network)
-      if (!error.message.includes("404")) {
-        alert("Failed to delete profile: " + error.message);
-        return;
-      }
+      console.warn(
+        "Server delete failed (ghost profile or server missing):",
+        error,
+      );
+      // We proceed to delete locally anyway. This allows cleanup of "ghost" profiles
+      // if the server was reset or the server ID is invalid.
     }
 
-    // Always remove locally if server delete succeeded OR if server returned 404
+    // Always remove from local store
     const updatedProfiles = profiles.filter((p) => p.id !== profile.id);
     await store.set("profiles", updatedProfiles);
     setProfiles(updatedProfiles);

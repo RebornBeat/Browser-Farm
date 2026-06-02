@@ -11,7 +11,7 @@ class BrowserFarmClient {
       headers: {
         "X-API-Key": apiKey,
       },
-      timeout: 10000, // 10 second timeout for all requests
+      timeout: 300000, // 5 min timeout to accommodate Xvfb/Browser startup
     });
     this.servers.set(id, { url, apiKey, client });
   }
