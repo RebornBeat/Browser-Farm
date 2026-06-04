@@ -393,10 +393,13 @@ function ProfileManager() {
                   {profile.status}
                 </span>
 
-                {profile.status === "idle" || profile.status === "stopped" ? (
+                {profile.status === "idle" ||
+                profile.status === "stopped" ||
+                profile.status === "crashed" ? (
                   <button
                     onClick={() => startProfile(profile)}
                     className="btn btn-success"
+                    title="Start Profile"
                   >
                     <Play className="w-4 h-4" />
                   </button>

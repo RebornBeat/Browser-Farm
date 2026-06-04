@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, Enum
+from sqlalchemy import Column, String, Integer, DateTime, Enum, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from .database import Base  # UPDATED: Import shared Base from database.py
@@ -87,3 +87,53 @@ class ProxyModel(Base):
 
     def __repr__(self):
         return f"<Proxy(id={self.id}, host={self.host})>"
+
+
+class DbAccount(Base):
+    """
+    SQL Table for Accounts.
+    Centralized credential management for automation.
+    """
+    __tablename__ = "accounts"
+
+    id = Column(String, primary_key=True, index=True)
+    platform = Column(String, nullable=False)
+    platform_url = Column(String, nullable=True)
+    username = Column(String, nullable=False)
+    password = Column(String, nullable=False) # Ideally encrypted at rest
+    email = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    notes = Column(String, nullable=True)
+
+    # Status
+    status = Column(String, default="active")
+    banned = Column(String, default="false")
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_used = Column(DateTime(timezone=True), nullable=True)
+
+    def __repr__(self):
+        return f"<Account(id={self.id}, username={self.username})>"
+
+
+class DbProxyHistory(Base):
+    """
+    Tracks usage of a specific Account on a specific Proxy for a specific Site.
+    Ensures '1 Account per Site per Proxy' compliance.
+    """
+    __tablename__ = "proxy_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(String, nullable=False, index=True)
+    proxy_id = Column(String, nullable=False, index=True)
+    website = Column(String, nullable=False) # e.g., 'instagram.com'
+    last_used = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Enforce that one account is only used on one proxy per website
+    __table_args__ = (
+        UniqueConstraint('account_id', 'website', name='uix_account_website'),
+    )
+
+    def __repr__(self):
+        return f"<ProxyHistory(account={self.account_id}, proxy={self.proxy_id}, site={self.website})>"

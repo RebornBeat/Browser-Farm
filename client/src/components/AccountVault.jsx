@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { Plus, User, Trash2, Eye, EyeOff } from "lucide-react";
+import { Plus, User, Trash2, Eye, EyeOff, Globe } from "lucide-react";
 import store from "../store/db";
 
 function AccountVault() {
   const [accounts, setAccounts] = useState([]);
+  const [proxies, setProxies] = useState([]); // NEW: State for proxies to enable assignment
   const [showAddModal, setShowAddModal] = useState(false);
   const [visiblePasswords, setVisiblePasswords] = useState({});
   const [newAccount, setNewAccount] = useState({
@@ -14,16 +15,23 @@ function AccountVault() {
     email: "",
     phone: "",
     notes: "",
+    assignedProxyId: null, // NEW: Field for proxy assignment
     status: "active",
   });
 
   useEffect(() => {
     loadAccounts();
+    loadProxies();
   }, []);
 
   const loadAccounts = async () => {
     const storedAccounts = (await store.get("accounts")) || [];
     setAccounts(storedAccounts);
+  };
+
+  const loadProxies = async () => {
+    const storedProxies = (await store.get("proxies")) || [];
+    setProxies(storedProxies);
   };
 
   const addAccount = async () => {
@@ -48,6 +56,7 @@ function AccountVault() {
       email: "",
       phone: "",
       notes: "",
+      assignedProxyId: null,
       status: "active",
     });
   };
@@ -82,6 +91,12 @@ function AccountVault() {
       ...prev,
       [accountId]: !prev[accountId],
     }));
+  };
+
+  const getProxyName = (proxyId) => {
+    if (!proxyId) return "None Assigned";
+    const proxy = proxies.find((p) => p.id === proxyId);
+    return proxy ? `${proxy.host}:${proxy.port}` : "Unknown Proxy";
   };
 
   return (
@@ -177,6 +192,18 @@ function AccountVault() {
                   </button>
                 </div>
               </div>
+
+              {/* NEW: Proxy Assignment Display */}
+              <div className="col-span-2">
+                <p className="text-dark-400">Assigned Proxy</p>
+                <div className="flex items-center space-x-2">
+                  <Globe className="w-4 h-4 text-dark-400" />
+                  <p className="text-white">
+                    {getProxyName(account.assignedProxyId)}
+                  </p>
+                </div>
+              </div>
+
               {account.notes && (
                 <div className="col-span-2">
                   <p className="text-dark-400">Notes</p>
@@ -294,6 +321,32 @@ function AccountVault() {
                     setNewAccount({ ...newAccount, phone: e.target.value })
                   }
                 />
+              </div>
+
+              {/* NEW: Proxy Selection in Modal */}
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Assign Proxy (optional)
+                </label>
+                <select
+                  className="input w-full"
+                  value={newAccount.assignedProxyId || ""}
+                  onChange={(e) =>
+                    setNewAccount({
+                      ...newAccount,
+                      assignedProxyId: e.target.value ? e.target.value : null,
+                    })
+                  }
+                >
+                  <option value="">No Proxy Assigned</option>
+                  {proxies
+                    .filter((p) => !p.blacklisted)
+                    .map((proxy) => (
+                      <option key={proxy.id} value={proxy.id}>
+                        {proxy.host}:{proxy.port} ({proxy.country || "N/A"})
+                      </option>
+                    ))}
+                </select>
               </div>
 
               <div>

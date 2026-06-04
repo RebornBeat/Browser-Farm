@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("✓ Database initialized")
 
-    # 2. Initialize Xvfb Manager
+    # 2. Initialize Xvfb Manager (Global/Legacy)
     xvfb = XvfbManager()
 
     # 3. Start context manager
@@ -300,28 +300,12 @@ async def start_profile(
     await db.commit()
 
     accounts_cache[profile_id] = accounts
-    display_str = "unknown"
 
     # Create context if not exists
     if profile_id not in context_manager.contexts:
-        # --- FIX: Run Xvfb start in a thread to prevent blocking the server ---
-        loop = asyncio.get_event_loop()
-        try:
-            # Run the synchronous Xvfb start in an executor (thread)
-            display_str = await loop.run_in_executor(
-                None,
-                xvfb.start_display,
-                profile_id
-            )
-            logger.info(f"Assigned display {display_str} to profile {profile_id}")
-        except Exception as e:
-            logger.error(f"Failed to start Xvfb for {profile_id}: {e}")
-            profile.status = ProfileStatus.CRASHED
-            await db.commit()
-            raise HTTPException(500, "Failed to initialize virtual display")
+        # --- FIX: Removed duplicate Xvfb logic. ContextManager handles resource allocation ---
 
         # Convert DB profile to Pydantic for context manager compatibility
-        # Using model_validate (Pydantic v2) or from_orm (v1) depending on setup
         # We construct manually here to be safe across versions
         profile_data = {
             "id": profile.id,
@@ -340,15 +324,18 @@ async def start_profile(
         }
         profile_pydantic = Profile(**profile_data)
 
-        await context_manager.create_profile(profile_pydantic, accounts, display_str)
-    else:
-        info = xvfb.active_displays.get(profile_id)
-        if info:
-            display_str = f":{info[1]}"
+        try:
+            # FIX: Removed 'display_str' argument. ContextManager handles Xvfb internally.
+            await context_manager.create_profile(profile_pydantic, accounts)
+        except Exception as e:
+            logger.error(f"Failed to create profile context for {profile_id}: {e}")
+            profile.status = ProfileStatus.CRASHED
+            await db.commit()
+            raise HTTPException(500, f"Failed to start profile: {str(e)}")
 
     await context_manager.start_profile(profile_id)
 
-    return {"status": "started", "display": display_str}
+    return {"status": "started"}
 
 
 @app.post("/profiles/{profile_id}/pause")
@@ -379,8 +366,8 @@ async def stop_profile(profile_id: str, _=verify_api_key, db: AsyncSession = Dep
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
+    # ContextManager handles Xvfb cleanup internally
     await context_manager.stop_profile(profile_id)
-    xvfb.stop_display(profile_id)
 
     profile.status = ProfileStatus.STOPPED
     await db.commit()
@@ -404,10 +391,8 @@ async def delete_profile(profile_id: str, _=verify_api_key, db: AsyncSession = D
         raise HTTPException(status_code=404, detail="Profile not found")
 
     if profile_id in context_manager.contexts:
+        # ContextManager handles Xvfb cleanup internally
         await context_manager.stop_profile(profile_id)
-
-    if profile_id in xvfb.active_displays:
-        xvfb.stop_display(profile_id)
 
     await db.delete(profile)
     await db.commit()

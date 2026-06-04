@@ -1,3 +1,5 @@
+README.md
+
 # Browser Farm
 
 A distributed browser automation platform for developers. Manage multiple browser contexts across multiple servers with live monitoring, manual control, and custom scripts.
@@ -5,50 +7,81 @@ A distributed browser automation platform for developers. Manage multiple browse
 ## Features
 
 - 🖥️ **Multi-Server Management** - Connect and manage multiple automation servers
+- 🗄️ **Persistent Storage** - PostgreSQL database backing for profiles, ensuring state survives restarts
 - 🌐 **Proxy Management** - Global proxy pool with per-site blacklisting
 - 👤 **Account Vault** - Centralized credential management for automation
-- 🤖 **Custom Scripts** - Write Python scripts using Playwright
+- 🤖 **Flexible Profile Modes** - Manual, Automated, or Command Center (Orchestrator) profiles
+- 📚 **Script Library** - Centralized database for modular, reusable scripts
+- 🔗 **Script Chaining** - Execute multiple scripts in sequence within a single profile
 - 📺 **Live Screen Viewing** - Real-time browser screen streaming
 - 🎮 **Manual Control** - Take over any browser context with mouse/keyboard
+- 🧠 **Command Center** - Dedicated orchestrator profiles to coordinate your farm
+- 🔗 **Inter-Profile Communication** - Shared state API for profile coordination
+- 🖱️ **Human-like Automation** - Native PyAutoGUI support via isolated virtual displays
+- 🕵️ **Anti-Detection** - Automatic injection of stealth scripts to hide automation flags
 - 📸 **Screenshots & Videos** - Automatic capture and gallery viewing
-- 📊 **Resource Monitoring** - Memory, CPU, and network metrics per context
-- 🔄 **Auto-Restart** - Memory threshold monitoring with custom restart scripts
+- 📊 **Resource Monitoring** - Non-blocking memory, CPU, and network metrics per context
+- 🔄 **Auto-Dependency Install** - Scripts can define requirements installed at runtime
 
 ## Architecture
+
 ```
 Desktop App (Electron + React)
-    ↓ HTTP/WebSocket
+    ↓ Management & Configuration
 Server (Python + FastAPI + Playwright)
-    ↓ Xvfb (Virtual Display)
-Chromium Browser
-    ↓ Multiple Contexts
-Your Custom Scripts
+    ↓ State & Persistence
+PostgreSQL Database
+    ↓ Isolated Xvfb Display Per Profile
+Chromium Browser (Stealth Injected)
+    ↓ Script Chain Execution
+Your Custom Scripts (Playwright + PyAutoGUI)
 ```
 
 ## Installation
 
-### Server Setup
+### Prerequisites
 
-**1. Install system dependencies:**
+1.  **PostgreSQL Database**: You need a running PostgreSQL instance.
+2.  **System Dependencies**: Xvfb, Chromium, and Python build tools.
+
+### Step 1: System Dependencies
+
 ```bash
 sudo apt update
-sudo apt install -y python3.10-venv python3-pip xvfb chromium-browser
+sudo apt install -y python3.10-venv python3-pip xvfb chromium-browser postgresql postgresql-contrib libpq-dev
 ```
 
-**2. Create installation directory:**
+### Step 2: Database Setup
+
+Create a dedicated database and user for Browser Farm.
+
+```bash
+# Switch to postgres user
+sudo -u postgres psql
+
+# In the SQL prompt:
+CREATE USER browser_farm_user WITH PASSWORD 'your_secure_password';
+CREATE DATABASE browser_farm_db OWNER browser_farm_user;
+GRANT ALL PRIVILEGES ON DATABASE browser_farm_db TO browser_farm_user;
+\q
+```
+
+### Step 3: Server Installation
+
+**1. Create installation directory:**
 ```bash
 sudo mkdir -p /opt/browser-farm
 cd /opt/browser-farm
 ```
 
-**3. Create Virtual Environment & Install Package:**
+**2. Create Virtual Environment:**
 ```bash
-# Create virtual environment
 python3 -m venv venv
-
-# Activate it
 source venv/bin/activate
+```
 
+**3. Install Package:**
+```bash
 # Install from PyPI
 pip install browser-farm
 
@@ -56,12 +89,26 @@ pip install browser-farm
 playwright install chromium
 ```
 
-**4. Manual Run (Testing):**
+### Step 4: Configuration (Environment Variables)
+
+The server requires the Database URL to start. You can set this in your environment or a `.env` file.
+
+**Create `.env` file:**
 ```bash
-python -m browser_farm.server --host 0.0.0.0 --port 8080
+nano /opt/browser-farm/.env
 ```
 
-### Production Deployment (Systemd)
+**Add the following content:**
+```ini
+# Database Connection String
+DATABASE_URL="postgresql+asyncpg://browser_farm_user:your_secure_password@localhost/browser_farm_db"
+
+# Optional: Override default port
+# PORT=8080
+# HOST=0.0.0.0
+```
+
+### Step 5: Production Deployment (Systemd)
 
 To run the server 24/7 with automatic restarts, use Systemd.
 
@@ -74,13 +121,15 @@ sudo nano /etc/systemd/system/browser-farm.service
 ```ini
 [Unit]
 Description=Browser Farm Server
-After=network.target
+After=network.target postgresql.service
 
 [Service]
 Type=simple
 User=root
 # Required for Xvfb and Headful browsers
 Environment="DISPLAY=:99"
+# Load Environment Variables from .env file
+EnvironmentFile=/opt/browser-farm/.env
 WorkingDirectory=/opt/browser-farm
 # Activate venv and run server
 ExecStart=/opt/browser-farm/venv/bin/python -m browser_farm.server --host 0.0.0.0 --port 8080
@@ -103,10 +152,33 @@ sudo systemctl start browser-farm
 # Check if running
 sudo systemctl status browser-farm
 
-# View logs to find your generated API Key
+# View logs to find your generated API Key and confirm DB connection
 sudo journalctl -u browser-farm -f
 ```
-*Look for the line: `✓ API Key: bf_...`*
+*Look for:*
+*   `Database tables created/verified.`
+*   `✓ API Key: bf_...`
+
+## Updating the Server
+
+When a new version is released:
+
+```bash
+# 1. Stop the service
+sudo systemctl stop browser-farm
+
+# 2. Activate venv
+cd /opt/browser-farm
+source venv/bin/activate
+
+# 3. Upgrade package
+pip install --upgrade browser-farm
+
+# 4. Start the service
+sudo systemctl start browser-farm
+```
+
+*Note: The server automatically handles database schema synchronization on startup for minor updates.*
 
 ### Client Setup
 
@@ -131,70 +203,112 @@ npm run dist
 2. **Add a server:**
    - Click "Add Server" in the Servers tab
    - Enter server URL: `http://192.168.1.100:8080`
-   - Enter API key: `bf_abc123xyz789`
+   - Enter API key: (Found in server logs)
    - Click "Connect"
 
 3. **Add a proxy:**
-   - Go to Proxies tab
-   - Click "Add Proxy"
-   - Enter proxy details
-   - Save
+   - Go to Proxies tab -> "Add Proxy"
+   - Enter details. (Optional: Can be skipped for Direct Connection).
 
-4. **Add an account:**
-   - Go to Accounts tab
-   - Click "Add Account"
-   - Enter credentials (stored locally, not encrypted)
-   - Save
+4. **Create scripts:**
+   - Go to the **Script Library** tab.
+   - Create modular scripts (e.g., "Instagram Login").
+   - Define requirements (e.g., `pyautogui`, `bs4`).
 
 5. **Create a profile:**
-   - Go to Profiles tab
-   - Click "New Profile"
-   - Select server, proxy, and configure browser
-   - Attach your Python script
-   - Set memory threshold
+   - Go to Profiles tab -> "New Profile"
+   - **Select Mode:**
+     - **Manual:** Opens a browser with proxy. No script.
+     - **Automated:** Runs a chain of scripts.
+     - **Command Center:** Orchestrates other profiles.
+   - Select Server & Proxy (or "No Proxy").
+   - **Attach Scripts:** Select scripts to run in sequence.
    - Click "Save & Start"
 
 6. **Monitor:**
-   - Go to Home to see live screens
-   - Click any screen to view details
-   - Click "Take Control" for manual operation
+   - Go to Home to see live screens.
+   - Click "Take Control" for manual operation.
 
 ## Writing Scripts
 
-Scripts are standard Python using Playwright. The `get_account` function is injected into your script's namespace at runtime, allowing you to securely access credentials attached to the profile.
+Scripts are standard Python using Playwright. The server injects powerful helpers into your script's namespace at runtime.
 
-**Example Script:**
+### Injected Namespace
+
+You have access to these objects/functions without importing them:
+- `context`: The Playwright BrowserContext.
+- `page`: Helper to get the current active page.
+- `accounts`: Dictionary of all accounts attached to this profile.
+- `get_account(account_id)`: Retrieve credentials from your vault.
+- `get_state(key)`: Retrieve shared state from the Orchestrator.
+- `set_state(key, value)`: Set shared state for other profiles.
+- `pyautogui`: The PyAutoGUI library (controls the mouse on the profile's dedicated virtual display).
+- `BeautifulSoup`: For HTML parsing.
+
+### Dependencies
+
+If your script requires external libraries, list them in the **"Requirements"** field when creating the script in the Client. The server will automatically `pip install` them in the background before running.
+
+### Example 1: Automation with Script Chaining & Shared State
+
+**Script 1: Login**
 ```python
 import asyncio
 
 async def main(context):
-    # 1. Get account credentials
-    # Note: 'get_account' is injected automatically.
-    # Use the Account ID from your Account Vault.
     account = get_account("acc_001")
-
     page = await context.new_page()
     await page.goto("https://instagram.com/accounts/login/")
 
-    # 2. Login using credentials
     await page.fill('input[name="username"]', account['username'])
     await page.fill('input[name="password"]', account['password'])
     await page.click('button[type="submit"]')
 
-    # 3. Wait for success
-    try:
-        await page.wait_for_url("https://instagram.com/", timeout=10000)
-        print("Login successful!")
-    except:
-        print("Login failed or challenged")
+    # Signal to other profiles
+    await set_state("insta_status", {"logged_in": True})
+```
 
-    # 4. Your automation logic here
-    while True:
-        # Keep session alive or perform tasks
-        await asyncio.sleep(3600)
+**Script 2: Scraper**
+*Requirements: beautifulsoup4*
+```python
+import asyncio
 
-if __name__ == "__main__":
-    asyncio.run(main())
+async def main(context):
+    # Check state from previous script
+    status = await get_state("insta_status")
+    if not status.get("logged_in"):
+        print("Not logged in!")
+        return
+
+    page = context.pages[0]
+    # ... scraping logic ...
+```
+
+### Example 2: Human-like Interaction with PyAutoGUI
+
+*Requirements: pyautogui*
+
+```python
+import asyncio
+import pyautogui
+
+async def main(context):
+    page = await context.new_page()
+    await page.goto("https://example.com")
+
+    # Use Playwright to get element position
+    button = await page.query_selector('button#submit')
+    box = await button.bounding_box()
+
+    if box:
+        center_x = box['x'] + box['width'] / 2
+        center_y = box['y'] + box['height'] / 2
+
+        # Move mouse human-like
+        pyautogui.moveTo(center_x, center_y, duration=1.0)
+        pyautogui.click()
+
+    await asyncio.sleep(5)
 ```
 
 ## API Documentation
@@ -205,6 +319,7 @@ See [API.md](./API.md) for full API reference.
 
 ### Server
 - Ubuntu 20.04+ or Debian 11+
+- PostgreSQL 12+
 - 4GB RAM minimum (8GB recommended)
 - 2 CPU cores minimum
 - 10GB disk space
@@ -219,6 +334,9 @@ See [API.md](./API.md) for full API reference.
 ### Server
 ```bash
 cd server
+# Create local .env
+echo "DATABASE_URL=postgresql+asyncpg://user:pass@localhost/db" > .env
+
 pip install -e .
 python -m browser_farm.server --dev
 ```
@@ -230,6 +348,14 @@ npm install
 npm run dev
 ```
 
+## Disclaimer
+
+**Browser Farm is intended for legitimate automation, testing, and research purposes only.**
+
+This software is provided "as is", without warranty of any kind. The developers of Browser Farm do not encourage, endorse, or facilitate any activity that violates the Terms of Service of any website or platform.
+
+Users are solely responsible for ensuring their usage of this software complies with all applicable laws and third-party agreements. Use of this tool to automate websites that explicitly forbid automation is done at the user's own risk.
+
 ## License
 
 MIT License - see [LICENSE](./LICENSE)
@@ -237,45 +363,15 @@ MIT License - see [LICENSE](./LICENSE)
 ## Support
 
 - GitHub Issues: [Issues](https://github.com/RebornBeat/browser-farm/issues)
-- Discord: [Join Server](https://discord.gg/browserfarm)
 
 ## Roadmap
 
+- [x] Script Library & Chaining
+- [x] Inter-Profile Communication
+- [x] PyAutoGUI Support
+- [x] PostgreSQL Persistence
 - [ ] Docker support
-- [ ] Kubernetes orchestration
-- [ ] Plugin system for custom integrations
-- [ ] Cloud proxy integration
-- [ ] Mobile app (iOS/Android)
-
-server/setup.py
-
-from setuptools import setup, find_packages
-
-setup(
-    name="browser-farm",
-    version="0.1.0",
-    packages=find_packages(where="src"),
-    install_requires=[
-        "fastapi>=0.109.0",
-        "uvicorn[standard]>=0.27.0",
-        "playwright>=1.41.0",
-        "psutil>=5.9.8",
-        "python-multipart>=0.0.6",
-        "python-dotenv>=1.0.0",
-        "pydantic>=2.5.3",
-        "pydantic-settings>=2.1.0",
-        "websockets>=12.0",
-        "aiofiles>=23.2.1",
-        "pillow>=10.2.0",
-    ],
-    package_dir={"": "src"},
-    include_package_data=True,
-    entry_points={
-        "console_scripts": [
-            "browser-farm=browser_farm.server:main"
-        ],
-    },
-)
+- [ ] LLM Orchestrator Integration
 
 server/pyproject.toml
 
@@ -285,7 +381,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "browser-farm"
-version = "0.1.0"
+version = "0.1.9"  # Bumped version for DB integration
 description = "A distributed browser automation platform for developers. Manage multiple browser contexts across multiple servers with live monitoring, manual control, and custom scripts."
 readme = "README.md"
 license = {text = "MIT"}
@@ -302,184 +398,1165 @@ dependencies = [
     "websockets>=12.0",
     "aiofiles>=23.2.1",
     "pillow>=10.2.0",
+    "aiohttp>=3.9.0",  # Added for Shared State API helpers
+
+    # --- Database Dependencies ---
+    "sqlalchemy[asyncio]>=2.0.0", # ORM with async support
+    "asyncpg>=0.29.0",            # PostgreSQL async driver
+    "greenlet>=3.0.0",            # Required for SQLAlchemy async context
 ]
+
+# This creates the "browser-farm" command line tool
+[project.scripts]
+browser-farm = "browser_farm.server:main"
 
 [project.urls]
 Homepage = "https://github.com/RebornBeat/Browser-Farm"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+# --- CRITICAL PACKAGE MAPPING ---
+[tool.setuptools]
+packages = ["browser_farm"]
+include-package-data = true
+
+[tool.setuptools.package-dir]
+# This tells pip: "The package 'browser_farm' is located in the 'src' folder"
+browser_farm = "src"
 
 server/MANIFEST.in
 
 include README.md
 include LICENSE
 
-server/src/xvfb_manager.py
+server/.env
 
-import subprocess
-import os
-import signal
-import time
-import logging
+# Database Connection String
+DATABASE_URL="postgresql+asyncpg://browser_farm_user:password@localhost/browser_farm_db"
 
-logger = logging.getLogger(__name__)
+# Optional: Override default port
+# PORT=8080
+# HOST=0.0.0.0
+
+server/src/__init__.py
+
+"""Browser Farm - Distributed Browser Automation Platform"""
+
+__version__ = "1.0.0"
+
+from .models import Profile, ProxyConfig, Account
+
+__all__ = ["Profile", "ProxyConfig", "Account"]
 
 
-class XvfbManager:
-    def __init__(self, display=":99", resolution="1920x1080x24"):
-        self.display = display
-        self.resolution = resolution
-        self.process = None
+def get_account(account_id: str) -> dict:
+    """
+    Get account credentials at runtime.
+    This function is injected by the server when running user scripts.
+    """
+    import os
+    import json
 
-    def start(self):
-        """Start Xvfb virtual display"""
-        try:
-            # Check if Xvfb is already running
-            if self._is_running():
-                logger.info(f"Xvfb already running on {self.display}")
-                os.environ["DISPLAY"] = self.display
-                return
+    accounts_json = os.environ.get("BROWSER_FARM_ACCOUNTS", "{}")
+    accounts = json.loads(accounts_json)
 
-            # Start Xvfb
-            cmd = [
-                "Xvfb",
-                self.display,
-                "-screen", "0", self.resolution,
-                "-ac",
-                "+extension", "GLX",
-                "+render",
-                "-noreset"
-            ]
+    if account_id not in accounts:
+        raise ValueError(f"Account {account_id} not found")
 
-            self.process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
+    return accounts[account_id]
 
-            # Wait for Xvfb to be ready
-            time.sleep(2)
-
-            # Set DISPLAY environment variable
-            os.environ["DISPLAY"] = self.display
-
-            logger.info(f"✓ Xvfb started on {self.display}")
-
-        except Exception as e:
-            logger.error(f"Failed to start Xvfb: {e}")
-            raise
-
-    def _is_running(self):
-        """Check if Xvfb is already running"""
-        try:
-            subprocess.run(
-                ["xdpyinfo", "-display", self.display],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True
-            )
-            return True
-        except:
-            return False
-
-    def stop(self):
-        """Stop Xvfb"""
-        if self.process:
-            self.process.terminate()
-            self.process.wait(timeout=5)
-            logger.info("Xvfb stopped")
-
-server/src/vnc_handler.py
+server/src/context_manager.py
 
 import asyncio
 import logging
-from typing import Dict
-from playwright.async_api import Page
+import os
+import json
+from pathlib import Path
+from typing import Dict, Optional, List
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
+from .models import Profile, ProfileStatus, ProxyConfig, ProfileMode
+from .script_runner import ScriptRunner
+from .memory_monitor import MemoryMonitor
+from .xvfb_manager import XvfbManager
 
 logger = logging.getLogger(__name__)
 
 
-class VNCHandler:
-    def __init__(self, page: Page):
-        self.page = page
+class ContextManager:
+    def __init__(self, data_dir: Path):
+        self.data_dir = data_dir
+        self.data_dir.mkdir(parents=True, exist_ok=True)
 
-    async def handle_mouse_move(self, x: int, y: int):
-        """Handle mouse move event"""
-        await self.page.mouse.move(x, y)
+        # Main Playwright instance (Singleton)
+        self.playwright: Optional[Playwright] = None
 
-    async def handle_mouse_click(self, x: int, y: int, button: str = "left"):
-        """Handle mouse click event"""
-        await self.page.mouse.click(x, y, button=button)
+        # Resource Pools
+        # We manage a dictionary of browsers because each profile gets its own process
+        # bound to its own Xvfb display. This allows concurrent PyAutoGUI usage.
+        self.browsers: Dict[str, Browser] = {}
+        self.contexts: Dict[str, BrowserContext] = {}
+        self.runners: Dict[str, ScriptRunner] = {}
+        self.monitors: Dict[str, MemoryMonitor] = {}
+        self.proxies: Dict[str, ProxyConfig] = {}
 
-    async def handle_keyboard(self, text: str):
-        """Handle keyboard input"""
-        await self.page.keyboard.type(text)
+        # Xvfb Manager handles virtual displays for isolation
+        self.xvfb_manager = XvfbManager()
 
-    async def handle_scroll(self, delta_y: int):
-        """Handle scroll event"""
-        await self.page.mouse.wheel(0, delta_y)
+        # Ensure data directories exist
+        (self.data_dir / "screenshots").mkdir(exist_ok=True)
+        (self.data_dir / "videos").mkdir(exist_ok=True)
+        (self.data_dir / "logs").mkdir(exist_ok=True)
 
-    async def process_action(self, action: Dict):
-        """Process a control action"""
-        action_type = action.get("type")
+    async def start(self):
+        """Initialize the Playwright engine."""
+        try:
+            self.playwright = await async_playwright().start()
+            logger.info("✓ Playwright engine started")
+        except Exception as e:
+            logger.critical(f"Failed to start Playwright: {e}")
+            raise
 
-        if action_type == "mouse_move":
-            await self.handle_mouse_move(action["x"], action["y"])
+    async def stop(self):
+        """Gracefully shutdown all active profiles and the Playwright engine."""
+        logger.info("Initiating graceful shutdown...")
 
-        elif action_type == "mouse_click":
-            await self.handle_mouse_click(
-                action["x"],
-                action["y"],
-                action.get("button", "left")
+        # Stop all active profiles
+        active_ids = list(self.contexts.keys())
+        if active_ids:
+            logger.info(f"Stopping {len(active_ids)} active profiles...")
+            # Gather all stop coroutines to run concurrently
+            await asyncio.gather(*[self.stop_profile(pid) for pid in active_ids])
+
+        # Stop Playwright
+        if self.playwright:
+            await self.playwright.stop()
+            logger.info("✓ Playwright engine stopped")
+
+    def register_proxy(self, proxy: ProxyConfig):
+        """Register a proxy configuration in the local pool."""
+        self.proxies[proxy.id] = proxy
+        logger.debug(f"Registered proxy: {proxy.id}")
+
+    async def create_profile(self, profile: Profile, accounts: Dict[str, dict]):
+        """
+        Create a fully isolated browser profile environment.
+
+        Workflow:
+        1. Allocate a dedicated Xvfb display.
+        2. Launch a dedicated Chromium process bound to that display.
+        3. Create a Browser Context with Proxy (Optional) & Geolocation settings.
+        4. Inject Stealth Scripts to mask automation signatures.
+        5. Initialize Script Runner and Resource Monitors.
+        """
+        if profile.id in self.contexts:
+            raise ValueError(f"Profile {profile.id} already exists")
+
+        # --- 1. Resource Allocation: Xvfb Display ---
+        try:
+            display_str = self.xvfb_manager.start_display(profile.id)
+            logger.info(f"[{profile.id}] Allocated Display: {display_str}")
+        except Exception as e:
+            logger.error(f"[{profile.id}] Failed to start Xvfb display: {e}")
+            raise RuntimeError("Failed to allocate virtual display")
+
+        # --- 2. Process Launch: Dedicated Browser ---
+        browser: Optional[Browser] = None
+        browser_pid: Optional[int] = None
+
+        try:
+            # --- UPDATE: Optional Proxy Logic ---
+            proxy_config = None
+            if profile.proxy_id:
+                # User selected a specific proxy
+                if profile.proxy_id in self.proxies:
+                    p = self.proxies[profile.proxy_id]
+                    proxy_config = {
+                        "server": f"{p.protocol}://{p.host}:{p.port}",
+                        "username": p.username,
+                        "password": p.password,
+                    }
+                    logger.info(f"[{profile.id}] Using proxy: {p.host}:{p.port}")
+                else:
+                    # Proxy ID provided but not found in registry
+                    logger.warning(f"[{profile.id}] Proxy ID {profile.proxy_id} not found. Proceeding without proxy.")
+            else:
+                # No proxy selected (None)
+                logger.info(f"[{profile.id}] No proxy selected. Running direct connection.")
+
+            # Launch Browser Instance
+            # Note: We launch one browser per profile to ensure thread-safe PyAutoGUI usage on specific displays.
+            browser = await self.playwright.chromium.launch(
+                headless=False,  # Must be headful for Xvfb/PyAutoGUI rendering
+                proxy=proxy_config, # Playwright handles None correctly (Direct connection)
+                args=[
+                    "--disable-blink-features=AutomationControlled",  # Mask Chrome automation flags
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",  # Often helpful in Xvfb
+                    "--disable-infobars",
+                    "--start-maximized",
+                ],
+                env={"DISPLAY": display_str} # Critical: Bind browser to specific display
             )
+            self.browsers[profile.id] = browser
 
-        elif action_type == "keyboard":
-            await self.handle_keyboard(action["text"])
+            # --- CRITICAL: Extract PID for Memory Monitor ---
+            # The .process() method returns a Popen object wrapping the browser process
+            browser_process = browser.process()
+            if browser_process:
+                browser_pid = browser_process.pid
+                logger.info(f"[{profile.id}] Browser PID: {browser_pid}")
 
-        elif action_type == "scroll":
-            await self.handle_scroll(action["delta_y"])
+        except Exception as e:
+            logger.error(f"[{profile.id}] Browser launch failed: {e}")
+            self.xvfb_manager.stop_display(profile.id) # Cleanup Display if browser fails
+            raise RuntimeError(f"Browser launch failed: {e}")
 
-server/src/utils.py
+        # --- 3. Context Creation & Stealth Injection ---
+        try:
+            context = await browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent=profile.user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+                locale=profile.locale,
+                timezone_id=profile.timezone,
+                geolocation={"latitude": profile.geolocation.lat, "longitude": profile.geolocation.lng} if profile.geolocation else None,
+                permissions=["geolocation"] if profile.geolocation else [],
+                ignore_https_errors=True,
+                # Record video for debugging
+                record_video_dir=str(self.data_dir / "videos" / profile.id),
+                record_video_size={"width": 1920, "height": 1080}
+            )
+            self.contexts[profile.id] = context
 
-import secrets
-import string
+            # --- ADVANCED STEALTH INJECTION ---
+            # Inject script to run before any page content loads to mask webdriver flags
+            await context.add_init_script("""
+                // Overwrite navigator.webdriver
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+
+                // Fake plugins array
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [
+                        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                        { name: 'Native Client', filename: 'internal-nacl-plugin' }
+                    ]
+                });
+
+                // Fake languages
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en']
+                });
+
+                // Mock Chrome runtime object
+                window.chrome = { runtime: {} };
+            """)
+
+            # Create a default page immediately so PyAutoGUI has a window to target
+            # This ensures the browser window is "realized" on the Xvfb display
+            page = await context.new_page()
+            logger.info(f"[{profile.id}] Context created with Stealth Injection")
+
+        except Exception as e:
+            logger.error(f"[{profile.id}] Context creation failed: {e}")
+            if browser: await browser.close()
+            del self.browsers[profile.id]
+            self.xvfb_manager.stop_display(profile.id)
+            raise
+
+        # --- 4. Logic Initialization: Runner & Monitor ---
+
+        # Script Runner
+        runner = ScriptRunner(
+            profile_id=profile.id,
+            context=context,
+            mode=profile.mode,
+            scripts=profile.scripts,
+            requirements=profile.requirements,
+            accounts=accounts,
+            display_env=display_str,
+            log_dir=self.data_dir / "logs" / profile.id
+        )
+        self.runners[profile.id] = runner
+
+        # Memory Monitor (Now passing browser_pid for accurate tracking)
+        monitor = MemoryMonitor(
+            profile_id=profile.id,
+            context=context,
+            threshold_mb=profile.memory_threshold_mb,
+            on_threshold_exceeded=lambda: asyncio.create_task(
+                self.restart_profile(profile.id, profile, accounts)
+            ),
+            browser_pid=browser_pid # Pass the PID here
+        )
+        self.monitors[profile.id] = monitor
+
+        logger.info(f"✓ Profile {profile.id} initialized successfully")
+        return profile.id
+
+    async def start_profile(self, profile_id: str):
+        """Start the script execution loop for a profile."""
+        if profile_id not in self.runners:
+            raise ValueError(f"Profile {profile_id} not found")
+
+        runner = self.runners[profile_id]
+        monitor = self.monitors[profile_id]
+
+        # Start monitoring
+        monitor.start()
+
+        # Start script execution
+        await runner.start()
+
+        logger.info(f"▶ Profile {profile_id} started")
+
+    async def pause_profile(self, profile_id: str):
+        """Pause the script execution."""
+        if profile_id not in self.runners:
+            raise ValueError(f"Profile {profile_id} not found")
+
+        await self.runners[profile_id].pause()
+        logger.info(f"⏸ Profile {profile_id} paused")
+
+    async def stop_profile(self, profile_id: str):
+        """Stop script, close browser, and release Xvfb display."""
+        logger.info(f"Stopping profile {profile_id}...")
+
+        # 1. Stop Script Runner
+        if profile_id in self.runners:
+            try:
+                await self.runners[profile_id].stop()
+            except Exception as e:
+                logger.error(f"Error stopping runner {profile_id}: {e}")
+            del self.runners[profile_id]
+
+        # 2. Stop Monitor
+        if profile_id in self.monitors:
+            self.monitors[profile_id].stop()
+            del self.monitors[profile_id]
+
+        # 3. Close Browser Context
+        if profile_id in self.contexts:
+            try:
+                await self.contexts[profile_id].close()
+            except Exception as e:
+                logger.error(f"Error closing context {profile_id}: {e}")
+            del self.contexts[profile_id]
+
+        # 4. Close Browser Process
+        if profile_id in self.browsers:
+            try:
+                await self.browsers[profile_id].close()
+            except Exception as e:
+                logger.error(f"Error closing browser {profile_id}: {e}")
+            del self.browsers[profile_id]
+
+        # 5. Release Xvfb Display
+        self.xvfb_manager.stop_display(profile_id)
+
+        logger.info(f"⏹ Profile {profile_id} stopped and resources released")
+
+    async def restart_profile(self, profile_id: str, profile: Profile, accounts: Dict[str, dict]):
+        """Handle automatic restart logic (e.g., after memory threshold breach)."""
+        logger.warning(f"⚠ Profile {profile_id} triggered restart. Re-initializing...")
+
+        await self.stop_profile(profile_id)
+
+        # Small delay to ensure resources are fully released
+        await asyncio.sleep(2)
+
+        await self.create_profile(profile, accounts)
+        await self.start_profile(profile_id)
+
+        logger.info(f"✓ Profile {profile_id} restarted successfully")
+
+    # --- Helper Methods ---
+
+    async def get_screenshot(self, profile_id: str) -> bytes:
+        """Capture a screenshot of the active page."""
+        if profile_id not in self.contexts:
+            raise ValueError(f"Profile {profile_id} not found")
+
+        context = self.contexts[profile_id]
+        pages = context.pages
+
+        if not pages:
+            # If no page is open, return a placeholder or raise error
+            raise ValueError("No pages open in context")
+
+        # Capture from the active page (usually the last one)
+        page = pages[-1]
+        return await page.screenshot(type="png")
+
+    async def save_screenshot(self, profile_id: str) -> str:
+        """Save a screenshot to disk and return filename."""
+        screenshot = await self.get_screenshot(profile_id)
+
+        timestamp = int(asyncio.get_event_loop().time())
+        filename = f"{profile_id}_{timestamp}.png"
+        filepath = self.data_dir / "screenshots" / filename
+
+        with open(filepath, "wb") as f:
+            f.write(screenshot)
+
+        return filename
+
+    def get_profile_status(self, profile_id: str) -> ProfileStatus:
+        """Get the current operational status of a profile."""
+        if profile_id not in self.runners:
+            return ProfileStatus.STOPPED
+        return self.runners[profile_id].status
+
+    def get_profile_metrics(self, profile_id: str) -> dict:
+        """Retrieve resource metrics for a profile."""
+        if profile_id not in self.monitors:
+            return {}
+        return self.monitors[profile_id].get_metrics()
+
+server/src/database.py
+
+import logging
+import os
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import declarative_base
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------
+
+# Default connection string for local development
+# Format: postgresql+asyncpg://user:password@host:port/database
+DEFAULT_DB_URL = "postgresql+asyncpg://browser_farm:browser_farm_pass@localhost:5432/browser_farm"
+
+# Fetch from environment or use default
+DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DB_URL)
+
+# Create the Async Engine
+# pool_pre_ping=True checks connections before using them (good for reliability)
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,  # Set to True for SQL query debugging
+    pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20
+)
+
+# Create the Session Factory
+# expire_on_commit=False is necessary for async so objects are accessible after commit
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False
+)
+
+# Base class for our ORM models
+# This is the ONLY place Base should be defined.
+Base = declarative_base()
+
+
+# ---------------------------------------------------------
+# Helper Functions
+# ---------------------------------------------------------
+
+async def init_db():
+    """
+    Initialize the database.
+    Creates all tables defined in the Base metadata.
+    NOTE: Ensure all models (from models_db.py) are imported in server.py
+    before calling this so they register on Base.
+    """
+    async with engine.begin() as conn:
+        logger.info("Initializing database tables...")
+        await conn.run_sync(Base.metadata.create_all)
+        logger.info("✓ Database tables created/verified.")
+
+
+async def get_db() -> AsyncSession:
+    """
+    Dependency function for FastAPI.
+    Yields an async session and ensures it is closed after use.
+    """
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+
+server/src/memory_monitor.py
+
+import asyncio
 import psutil
-import platform
+import logging
+from typing import Callable, Optional
+from playwright.async_api import BrowserContext
+
+logger = logging.getLogger(__name__)
+
+
+class MemoryMonitor:
+    def __init__(
+        self,
+        profile_id: str,
+        context: BrowserContext,
+        threshold_mb: int,
+        on_threshold_exceeded: Callable,
+        browser_pid: Optional[int] = None  # New: Accept the Browser PID for accurate tracking
+    ):
+        self.profile_id = profile_id
+        self.context = context
+        self.threshold_mb = threshold_mb
+        self.on_threshold_exceeded = on_threshold_exceeded
+        self.browser_pid = browser_pid
+
+        self.task: Optional[asyncio.Task] = None
+        self.running = False
+
+        self.current_memory_mb = 0
+        self.cpu_percent = 0.0
+
+    def start(self):
+        """Start monitoring"""
+        if self.running:
+            return
+
+        self.running = True
+        self.task = asyncio.create_task(self._monitor())
+        logger.info(f"Started memory monitor for {self.profile_id}")
+
+    def stop(self):
+        """Stop monitoring"""
+        self.running = False
+        if self.task:
+            self.task.cancel()
+        logger.info(f"Stopped memory monitor for {self.profile_id}")
+
+    async def _monitor(self):
+        """Monitor memory usage"""
+        while self.running:
+            try:
+                # Get memory usage
+                memory_mb = await self._get_memory_usage()
+                self.current_memory_mb = memory_mb
+
+                # Get CPU usage
+                cpu = await self._get_cpu_usage()
+                self.cpu_percent = cpu
+
+                # Check threshold
+                if memory_mb > self.threshold_mb:
+                    logger.warning(
+                        f"Profile {self.profile_id} exceeded memory threshold: "
+                        f"{memory_mb}MB > {self.threshold_mb}MB"
+                    )
+                    if self.on_threshold_exceeded:
+                        self.on_threshold_exceeded()
+                    break
+
+                await asyncio.sleep(30)  # Check every 30 seconds
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in memory monitor: {e}")
+                await asyncio.sleep(30)
+
+    async def _get_memory_usage(self) -> int:
+        """
+        Get accurate memory usage in MB by tracking the browser process tree.
+        Falls back to CDP if PID is not available.
+        """
+        try:
+            # Method 1: Use PSUtil on the Browser Process Tree (Most Accurate)
+            if self.browser_pid:
+                try:
+                    parent = psutil.Process(self.browser_pid)
+                    memory_bytes = parent.memory_info().rss
+
+                    # Sum memory of all child processes (renderers, GPU, extensions)
+                    children = parent.children(recursive=True)
+                    for child in children:
+                        try:
+                            memory_bytes += child.memory_info().rss
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            continue
+
+                    return int(memory_bytes / (1024 * 1024))
+
+                except psutil.NoSuchProcess:
+                    logger.warning(f"Browser process {self.browser_pid} not found for memory check.")
+                    return 0
+                except Exception as e:
+                    logger.error(f"Psutil error: {e}")
+
+            # Method 2: Fallback to CDP (Approximation) if PID not provided
+            # Note: This is less accurate for total memory but better than nothing
+            pages = self.context.pages
+            if not pages:
+                return 0
+
+            # Try to get JS Heap Size as a proxy for memory usage
+            try:
+                page = pages[0]
+                client = await page.context.new_cdp_session(page)
+                # Get metrics from the page
+                metrics = await client.send("Performance.getMetrics")
+
+                # Look for JSHeapUsedSize
+                heap_used = 0
+                for m in metrics.get('metrics', []):
+                    if m['name'] == 'JSHeapUsedSize':
+                        heap_used = m['value']
+
+                # This is only heap size, not total memory, so it's a lower bound estimate
+                # Multiply by heuristic factor (e.g., 2x) to approximate total process size
+                return int((heap_used * 2) / (1024 * 1024))
+
+            except Exception as e:
+                logger.error(f"CDP fallback memory check failed: {e}")
+                return 0
+
+        except Exception as e:
+            logger.error(f"Critical error getting memory usage: {e}")
+            return 0
+
+    async def _get_cpu_usage(self) -> float:
+        """
+        Get accurate CPU usage percentage of the browser process tree.
+        """
+        try:
+            if self.browser_pid:
+                try:
+                    parent = psutil.Process(self.browser_pid)
+                    # Get CPU for parent
+                    cpu_total = parent.cpu_percent(interval=0.1)
+
+                    # Sum CPU of all children
+                    children = parent.children(recursive=True)
+                    for child in children:
+                        try:
+                            cpu_total += child.cpu_percent(interval=0.1)
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            continue
+
+                    return cpu_total
+
+                except psutil.NoSuchProcess:
+                    return 0.0
+
+            # Fallback: System-wide CPU (Not ideal for profile-specific)
+            return psutil.cpu_percent(interval=0.1)
+
+        except Exception as e:
+            logger.error(f"Error getting CPU usage: {e}")
+            return 0.0
+
+    def get_metrics(self) -> dict:
+        """Get current metrics"""
+        return {
+            "memory_mb": self.current_memory_mb,
+            "memory_limit_mb": self.threshold_mb,
+            "cpu_percent": self.cpu_percent,
+        }
+
+server/src/models.py
+
+from pydantic import BaseModel, Field, ConfigDict
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+from enum import Enum
+
+
+class ProfileStatus(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    PAUSED = "paused"
+    STOPPED = "stopped"
+    CRASHED = "crashed"
+    INSTALLING = "installing"  # Status for dependency installation phase
+
+
+class ProfileMode(str, Enum):
+    MANUAL = "manual"               # Browser only, no script execution
+    AUTOMATED = "automated"         # Standard script chain execution
+    COMMAND_CENTER = "command_center" # Orchestrator profile (Singleton per server)
+
+
+class ProxyConfig(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    host: str
+    port: int
+    protocol: str = "http"
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+
+class Account(BaseModel):
+    """Account credentials for automation"""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    platform: str
+    platform_url: Optional[str] = None
+    username: str
+    password: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    notes: Optional[str] = None
+    status: str = "active"
+    banned: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_used: Optional[datetime] = None
+
+
+class Geolocation(BaseModel):
+    lat: float
+    lng: float
+
+
+class Profile(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    mode: ProfileMode = ProfileMode.AUTOMATED
+    proxy_id: Optional[str] = None  # Updated: Optional to support "No Proxy"
+
+    # Browser Configuration
+    user_agent: Optional[str] = None
+    timezone: str = "America/New_York"
+    locale: str = "en-US"
+    geolocation: Optional[Geolocation] = None
+
+    # Script & Execution Configuration
+    scripts: List[str] = []            # List of script code strings (Chain)
+    requirements: List[str] = []       # List of pip packages e.g. ["pyautogui", "bs4"]
+
+    # Resource Management
+    memory_threshold_mb: int = 400
+
+    # State
+    status: ProfileStatus = ProfileStatus.IDLE
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ProfileCreate(BaseModel):
+    name: str
+    mode: ProfileMode = ProfileMode.AUTOMATED
+    proxy_id: Optional[str] = None  # Updated: Optional to support "No Proxy"
+
+    # Browser Configuration
+    user_agent: Optional[str] = None
+    timezone: str = "America/New_York"
+    locale: str = "en-US"
+    geolocation: Optional[Geolocation] = None
+
+    # Script & Execution Configuration
+    scripts: List[str] = []
+    requirements: List[str] = []
+
+    # Resource Management
+    memory_threshold_mb: int = 400
+
+
+class ProfileMetrics(BaseModel):
+    memory_mb: int
+    memory_limit_mb: int
+    cpu_percent: float
+    uptime_seconds: int
+    network_rx_bytes: int = 0
+    network_tx_bytes: int = 0
+
+
+class Screenshot(BaseModel):
+    id: str
+    timestamp: datetime
+    url: str
+    size_bytes: int
+
+
+class Video(BaseModel):
+    id: str
+    timestamp: datetime
+    url: str
+    duration_seconds: int
+    size_bytes: int
+
+
+class LogEntry(BaseModel):
+    timestamp: datetime
+    level: str
+    message: str
+
+
+class ServerHealth(BaseModel):
+    status: str
+    version: str
+    max_contexts: int
+    current_contexts: int
+    memory_total_mb: int
+    memory_used_mb: int
+    memory_available_mb: int
+    cpu_usage: float
+    uptime_seconds: int
+
+server/src/models_db.py
+
+from sqlalchemy import Column, String, Integer, DateTime, Enum
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.sql import func
+from .database import Base  # UPDATED: Import shared Base from database.py
+import enum
+
+# -----------------------------------------------
+# Enums (Mirror Pydantic models)
+# -----------------------------------------------
+
+class ProfileStatusDB(str, enum.Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    PAUSED = "paused"
+    STOPPED = "stopped"
+    CRASHED = "crashed"
+    INSTALLING = "installing"
+
+class ProfileModeDB(str, enum.Enum):
+    MANUAL = "manual"
+    AUTOMATED = "automated"
+    COMMAND_CENTER = "command_center"
+
+# -----------------------------------------------
+# Models
+# -----------------------------------------------
+
+class DbProfile(Base):  # FIXED: Renamed from ProfileModel to DbProfile to match server.py import
+    """
+    SQL Table for Profiles.
+    Replaces the in-memory 'profiles' dictionary.
+    """
+    __tablename__ = "profiles"
+
+    # Primary Key (Matches the generated ID from server.py)
+    id = Column(String, primary_key=True, index=True)
+
+    # Core Info
+    name = Column(String, nullable=False)
+    mode = Column(Enum(ProfileModeDB), default=ProfileModeDB.AUTOMATED, nullable=False)
+
+    # Configuration
+    proxy_id = Column(String, nullable=True) # Optional: ID of the proxy
+    user_agent = Column(String, nullable=True)
+    timezone = Column(String, default="America/New_York")
+    locale = Column(String, default="en-US")
+    geolocation = Column(JSONB, nullable=True) # Stores {"lat": float, "lng": float}
+
+    # Execution Config (Stored as JSONB arrays)
+    scripts = Column(JSONB, default=[])       # List of script code strings
+    requirements = Column(JSONB, default=[])  # List of pip package strings
+
+    # Resource Management
+    memory_threshold_mb = Column(Integer, default=400)
+
+    # State Management
+    status = Column(Enum(ProfileStatusDB), default=ProfileStatusDB.IDLE, nullable=False)
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    def __repr__(self):
+        return f"<Profile(id={self.id}, name={self.name}, status={self.status})>"
+
+
+class ProxyModel(Base):
+    """
+    SQL Table for Proxies.
+    Allows persistence of proxy configurations linked to profiles.
+    """
+    __tablename__ = "proxies"
+
+    id = Column(String, primary_key=True, index=True)
+    host = Column(String, nullable=False)
+    port = Column(Integer, nullable=False)
+    protocol = Column(String, default="http")
+    username = Column(String, nullable=True)
+    password = Column(String, nullable=True)
+
+    # Metadata
+    country = Column(String, nullable=True)
+    blacklisted = Column(String, default=False) # Storing as string/bool depending on dialect
+    blacklisted_sites = Column(JSONB, default=[])
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    def __repr__(self):
+        return f"<Proxy(id={self.id}, host={self.host})>"
+
+server/src/script_runner.py
+
+import asyncio
+import logging
+import subprocess
+import sys
+import os
+import aiohttp
 from pathlib import Path
+from typing import Dict, List, Optional
+from playwright.async_api import BrowserContext
+from .models import ProfileStatus, ProfileMode
+
+logger = logging.getLogger(__name__)
 
 
-def generate_api_key() -> str:
-    """Generate a random API key"""
-    alphabet = string.ascii_letters + string.digits
-    return "bf_" + "".join(secrets.choice(alphabet) for _ in range(32))
+# --- Shared State Helpers (Communicate with Local Server API) ---
+
+async def _get_shared_state(key: str):
+    """Helper to get state from the server's internal key-value store."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://localhost:8080/state/{key}") as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                return {}
+    except Exception as e:
+        logger.error(f"Failed to get shared state: {e}")
+        return {}
+
+async def _set_shared_state(key: str, value: dict):
+    """Helper to set state in the server's internal key-value store."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"http://localhost:8080/state/{key}", json=value) as resp:
+                return await resp.json()
+    except Exception as e:
+        logger.error(f"Failed to set shared state: {e}")
+        return {"error": str(e)}
 
 
-def get_system_info() -> dict:
-    """Get system information"""
-    return {
-        "platform": platform.system(),
-        "platform_version": platform.version(),
-        "architecture": platform.machine(),
-        "cpu_count": psutil.cpu_count(),
-        "memory_total": psutil.virtual_memory().total,
-    }
+def _create_get_account_function(accounts: Dict[str, dict]):
+    """
+    Creates a closure for the get_account function bound to a specific
+    set of accounts. This ensures thread-safety for concurrent profiles.
+    """
+    def get_account(account_id: str) -> dict:
+        if account_id not in accounts:
+            raise ValueError(f"Account {account_id} not found")
+        return accounts[account_id]
+    return get_account
 
 
-def get_memory_usage() -> dict:
-    """Get current memory usage"""
-    mem = psutil.virtual_memory()
-    return {
-        "total_mb": int(mem.total / (1024 * 1024)),
-        "used_mb": int(mem.used / (1024 * 1024)),
-        "available_mb": int(mem.available / (1024 * 1024)),
-        "percent": mem.percent,
-    }
+class ScriptRunner:
+    def __init__(
+        self,
+        profile_id: str,
+        context: BrowserContext,
+        mode: ProfileMode,
+        scripts: List[str],
+        requirements: List[str],
+        accounts: Dict[str, dict],
+        display_env: str,
+        log_dir: Path
+    ):
+        self.profile_id = profile_id
+        self.context = context
+        self.mode = mode
+        self.scripts = scripts
+        self.requirements = requirements
+        self.accounts = accounts
+        self.display_env = display_env
+        self.log_dir = log_dir
+        self.log_dir.mkdir(parents=True, exist_ok=True)
 
+        self.task: Optional[asyncio.Task] = None
+        self.status = ProfileStatus.IDLE
 
-def get_cpu_usage() -> float:
-    """Get current CPU usage percentage"""
-    return psutil.cpu_percent(interval=1)
+        # Set up logging
+        self.log_file = self.log_dir / "script.log"
+        self.setup_logging()
+
+    def setup_logging(self):
+        """Set up logging for this script"""
+        # Clear existing handlers to prevent duplicates on restarts
+        script_logger = logging.getLogger(f"script.{self.profile_id}")
+        if script_logger.hasHandlers():
+            script_logger.handlers.clear()
+
+        file_handler = logging.FileHandler(self.log_file)
+        file_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        script_logger.addHandler(file_handler)
+        script_logger.setLevel(logging.INFO)
+
+    async def install_dependencies(self):
+        """Install pip requirements for this profile."""
+        if not self.requirements:
+            return
+
+        logger.info(f"[{self.profile_id}] Installing dependencies: {self.requirements}")
+        script_logger = logging.getLogger(f"script.{self.profile_id}")
+        script_logger.info(f"Installing requirements: {self.requirements}")
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "pip", "install", *self.requirements,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0:
+                logger.info(f"[{self.profile_id}] Dependencies installed successfully.")
+                script_logger.info("Dependencies installed successfully.")
+            else:
+                err_msg = stderr.decode()
+                logger.error(f"[{self.profile_id}] Pip install failed: {err_msg}")
+                script_logger.error(f"Dependency installation failed: {err_msg}")
+                raise Exception(f"Failed to install dependencies: {err_msg}")
+
+        except Exception as e:
+            logger.error(f"[{self.profile_id}] Exception during dependency install: {e}")
+            raise
+
+    async def start(self):
+        """Start running the script"""
+        if self.task and not self.task.done():
+            logger.warning(f"Script {self.profile_id} already running")
+            return
+
+        # Pre-flight: Install Dependencies if present
+        if self.requirements:
+            self.status = ProfileStatus.INSTALLING
+            try:
+                await self.install_dependencies()
+            except Exception:
+                self.status = ProfileStatus.CRASHED
+                return
+
+        self.status = ProfileStatus.RUNNING
+        self.task = asyncio.create_task(self._run())
+        logger.info(f"Started script {self.profile_id} in {self.mode} mode")
+
+    async def pause(self):
+        """Pause the script"""
+        if self.task:
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+
+        self.status = ProfileStatus.PAUSED
+        logger.info(f"Paused script {self.profile_id}")
+
+    async def stop(self):
+        """Stop the script"""
+        if self.task:
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+
+        self.status = ProfileStatus.STOPPED
+        logger.info(f"Stopped script {self.profile_id}")
+
+    async def _run(self):
+        """Run the user's script based on the profile mode."""
+        script_logger = logging.getLogger(f"script.{self.profile_id}")
+
+        try:
+            # Set the DISPLAY environment variable for this specific task
+            # Critical for PyAutoGUI to target the correct Xvfb display
+            os.environ["DISPLAY"] = self.display_env
+
+            # --- MODE: MANUAL ---
+            if self.mode == ProfileMode.MANUAL:
+                script_logger.info("Profile running in MANUAL mode. Browser active, no script execution.")
+                self.status = ProfileStatus.RUNNING
+                # Keep the context alive indefinitely until cancelled
+                while True:
+                    await asyncio.sleep(3600)
+
+            # --- MODE: AUTOMATED / COMMAND CENTER ---
+            script_logger.info(f"Profile running in {self.mode} mode. Executing {len(self.scripts)} script(s).")
+
+            # Prepare injected functions
+            injected_get_account = _create_get_account_function(self.accounts)
+
+            # Prepare external libraries for injection
+            # We initialize as None, then attempt import.
+            # This prevents NameError if requirements were not set but script doesn't use them.
+            _pyautogui = None
+            _BeautifulSoup = None
+
+            try:
+                import pyautogui
+                _pyautogui = pyautogui
+            except ImportError:
+                pass # User script might not need it
+
+            try:
+                from bs4 import BeautifulSoup
+                _BeautifulSoup = BeautifulSoup
+            except ImportError:
+                pass
+
+            # Execute Script Chain
+            for i, script_code in enumerate(self.scripts):
+                if self.status == ProfileStatus.STOPPED:
+                    break
+
+                script_logger.info(f"Executing script module {i+1}/{len(self.scripts)}...")
+
+                # Prepare Namespace
+                namespace = {
+                    # Context & Page
+                    "context": self.context,
+                    "page": self.context.pages[0] if self.context.pages else None,
+
+                    # Data Access
+                    "accounts": self.accounts,
+                    "get_account": injected_get_account,
+
+                    # Shared State API
+                    "get_state": _get_shared_state,
+                    "set_state": _set_shared_state,
+
+                    # External Libraries (Injected)
+                    "pyautogui": _pyautogui,
+                    "BeautifulSoup": _BeautifulSoup,
+
+                    # Standard Libs
+                    "asyncio": asyncio,
+                    "os": os,
+                    "__name__": "__main__",
+                }
+
+                # Execute Script Code
+                exec(script_code, namespace)
+
+                # If the script defines a main() function, run it
+                if "main" in namespace and callable(namespace["main"]):
+                    await namespace["main"](self.context)
+
+                script_logger.info(f"Script module {i+1} finished.")
+
+            script_logger.info("All scripts executed successfully.")
+            self.status = ProfileStatus.IDLE
+
+        except asyncio.CancelledError:
+            script_logger.info("Script cancelled")
+            self.status = ProfileStatus.STOPPED
+            raise
+        except Exception as e:
+            script_logger.error(f"Script error: {e}", exc_info=True)
+            self.status = ProfileStatus.CRASHED
+            raise
 
 server/src/server.py
 
@@ -488,20 +1565,27 @@ import logging
 import argparse
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header
+from typing import Dict, List, Optional, Any
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update
 
+# Local Imports
 from .models import (
     Profile, ProfileCreate, ProfileStatus, ProfileMetrics,
-    ProxyConfig, Screenshot, Video, LogEntry, ServerHealth
+    ProxyConfig, Screenshot, Video, LogEntry, ServerHealth, ProfileMode
 )
 from .context_manager import ContextManager
 from .xvfb_manager import XvfbManager
 from .vnc_handler import VNCHandler
-from .utils import generate_api_key, get_memory_usage, get_cpu_usage
+from .utils import generate_api_key, get_memory_usage, get_cached_cpu_usage
+
+# Database Imports
+from .database import get_db, init_db, AsyncSessionLocal
+from .models_db import DbProfile
 
 # Set up logging
 logging.basicConfig(
@@ -515,26 +1599,53 @@ API_KEY = generate_api_key()
 START_TIME = time.time()
 context_manager: Optional[ContextManager] = None
 xvfb: Optional[XvfbManager] = None
-profiles: Dict[str, Profile] = {}
-accounts_cache: Dict[str, Dict[str, dict]] = {}  # profile_id -> accounts
+# Runtime caches (Not persistent)
+accounts_cache: Dict[str, Dict[str, dict]] = {}
+shared_state_data: Dict[str, Any] = {}
+command_center_id: Optional[str] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
-    global context_manager, xvfb
+    global context_manager, xvfb, command_center_id
 
     # Startup
     logger.info("Starting Browser Farm server...")
 
-    # Start Xvfb
-    xvfb = XvfbManager()
-    xvfb.start()
+    # 1. Initialize Database
+    await init_db()
+    logger.info("✓ Database initialized")
 
-    # Start context manager
+    # 2. Initialize Xvfb Manager
+    xvfb = XvfbManager()
+
+    # 3. Start context manager
     data_dir = Path.home() / ".browser-farm" / "data"
     context_manager = ContextManager(data_dir)
     await context_manager.start()
+
+    # 4. Crash Recovery Logic
+    # If server restarted, any 'running' profiles in DB are actually dead.
+    # We must mark them as STOPPED.
+    async with AsyncSessionLocal() as session:
+        stmt = select(DbProfile).where(DbProfile.status.in_([ProfileStatus.RUNNING, ProfileStatus.PAUSED]))
+        result = await session.execute(stmt)
+        active_profiles = result.scalars().all()
+
+        if active_profiles:
+            logger.warning(f"Found {len(active_profiles)} profiles in RUNNING/PAUSED state during startup. Marking as STOPPED.")
+            for p in active_profiles:
+                p.status = ProfileStatus.STOPPED
+            await session.commit()
+
+        # Check for existing Command Center
+        cc_stmt = select(DbProfile).where(DbProfile.mode == ProfileMode.COMMAND_CENTER)
+        cc_result = await session.execute(cc_stmt)
+        cc_profile = cc_result.scalar_one_or_none()
+        if cc_profile:
+            command_center_id = cc_profile.id
+            logger.info(f"Restored Command Center reference: {command_center_id}")
 
     logger.info(f"✓ Server running")
     logger.info(f"✓ API Key: {API_KEY}")
@@ -546,7 +1657,7 @@ async def lifespan(app: FastAPI):
     if context_manager:
         await context_manager.stop()
     if xvfb:
-        xvfb.stop()
+        xvfb.stop_all()
 
 
 app = FastAPI(
@@ -572,9 +1683,35 @@ def verify_api_key(x_api_key: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
+# ---------------------------------------------------------
+# SHARED STATE ENDPOINTS (Inter-Profile Communication)
+# ---------------------------------------------------------
+
+@app.post("/state/{key}")
+async def set_shared_state(key: str, value: Dict[Any, Any], _=verify_api_key):
+    """Set a value in the shared state"""
+    shared_state_data[key] = value
+    return {"status": "ok"}
+
+@app.get("/state/{key}")
+async def get_shared_state(key: str, _=verify_api_key):
+    """Get a value from the shared state"""
+    return shared_state_data.get(key, {})
+
+@app.delete("/state/{key}")
+async def delete_shared_state(key: str, _=verify_api_key):
+    """Delete a value from the shared state"""
+    if key in shared_state_data:
+        del shared_state_data[key]
+    return {"status": "ok"}
+
+# ---------------------------------------------------------
+# CORE ENDPOINTS
+# ---------------------------------------------------------
+
 @app.get("/health", response_model=ServerHealth)
 async def health():
-    """Get server health"""
+    """Get server health and system metrics (Non-blocking)"""
     mem = get_memory_usage()
     uptime = int(time.time() - START_TIME)
 
@@ -582,94 +1719,118 @@ async def health():
         status="online",
         version="1.0.0",
         max_contexts=20,
-        current_contexts=len(profiles),
+        current_contexts=len(context_manager.contexts),
         memory_total_mb=mem["total_mb"],
         memory_used_mb=mem["used_mb"],
         memory_available_mb=mem["available_mb"],
-        cpu_usage=get_cpu_usage(),
+        cpu_usage=get_cached_cpu_usage(), # Non-blocking
         uptime_seconds=uptime
     )
 
 
 @app.post("/proxies")
 async def register_proxy(proxy: ProxyConfig, _=verify_api_key):
-    """Register a proxy"""
+    """Register a proxy configuration"""
     context_manager.register_proxy(proxy)
     return {"status": "ok"}
 
 
 @app.get("/profiles")
-async def list_profiles(_=verify_api_key):
-    """List all profiles"""
-    result = []
-    for profile_id, profile in profiles.items():
-        metrics = context_manager.get_profile_metrics(profile_id) if profile_id in context_manager.contexts else {}
+async def list_profiles(_=verify_api_key, db: AsyncSession = Depends(get_db)):
+    """List all profiles with their status and metrics"""
+    result = await db.execute(select(DbProfile))
+    db_profiles = result.scalars().all()
 
-        result.append({
-            "id": profile.id,
-            "name": profile.name,
-            "status": context_manager.get_profile_status(profile_id).value,
-            "proxy_id": profile.proxy_id,
+    response_data = []
+    for p in db_profiles:
+        # Mix DB data with live runtime metrics if available
+        metrics = context_manager.get_profile_metrics(p.id) if p.id in context_manager.contexts else {}
+
+        response_data.append({
+            "id": p.id,
+            "name": p.name,
+            "mode": p.mode.value,
+            "status": p.status.value,
+            "proxy_id": p.proxy_id,
             "memory_mb": metrics.get("memory_mb", 0),
             "cpu_percent": metrics.get("cpu_percent", 0),
-            "uptime_seconds": 0,  # TODO: track uptime
-            "last_screenshot": f"/screenshots/{profile_id}_latest.png",
-            "created_at": profile.created_at.isoformat()
+            "uptime_seconds": 0,
+            "last_screenshot": f"/screenshots/{p.id}_latest.png",
+            "created_at": p.created_at.isoformat()
         })
 
-    return {"profiles": result}
+    return {"profiles": response_data}
 
 
 @app.post("/profiles")
-async def create_profile(data: ProfileCreate, _=verify_api_key):
+async def create_profile(data: ProfileCreate, _=verify_api_key, db: AsyncSession = Depends(get_db)):
     """Create a new profile"""
-    profile_id = f"profile_{len(profiles) + 1:03d}"
+    global command_center_id
 
-    profile = Profile(
+    # Enforce Single Command Center Constraint
+    if data.mode == ProfileMode.COMMAND_CENTER:
+        if command_center_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A Command Center profile already exists (ID: {command_center_id})"
+            )
+        command_center_id = "temp_placeholder" # Will be replaced by ID
+
+    # Create DB Model
+    profile_id = f"profile_{int(time.time() * 1000)}" # Unique ID based on timestamp
+
+    db_profile = DbProfile(
         id=profile_id,
         name=data.name,
+        mode=data.mode,
         proxy_id=data.proxy_id,
         user_agent=data.user_agent,
         timezone=data.timezone,
         locale=data.locale,
         geolocation=data.geolocation,
-        script_code=data.script_code,
-        restart_script_code=data.restart_script_code,
+        scripts=data.scripts,
+        requirements=data.requirements,
         memory_threshold_mb=data.memory_threshold_mb,
         status=ProfileStatus.IDLE
     )
 
-    profiles[profile_id] = profile
+    db.add(db_profile)
+    await db.commit()
+    await db.refresh(db_profile)
 
-    # Note: Accounts are provided when starting the profile
-    # For now, store empty dict
-    accounts_cache[profile_id] = {}
+    if data.mode == ProfileMode.COMMAND_CENTER:
+        command_center_id = db_profile.id
+        logger.info(f"Designated profile {profile_id} as Command Center.")
 
-    logger.info(f"Created profile {profile_id}")
+    logger.info(f"Created profile {profile_id} (Mode: {data.mode}, Proxy: {data.proxy_id or 'None'})")
 
     return {"id": profile_id, "status": "created"}
 
 
 @app.get("/profiles/{profile_id}")
-async def get_profile(profile_id: str, _=verify_api_key):
-    """Get profile details"""
-    if profile_id not in profiles:
+async def get_profile(profile_id: str, _=verify_api_key, db: AsyncSession = Depends(get_db)):
+    """Get detailed profile information"""
+    result = await db.execute(select(DbProfile).where(DbProfile.id == profile_id))
+    profile = result.scalar_one_or_none()
+
+    if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    profile = profiles[profile_id]
     metrics = context_manager.get_profile_metrics(profile_id) if profile_id in context_manager.contexts else {}
 
     return {
         "id": profile.id,
         "name": profile.name,
-        "status": context_manager.get_profile_status(profile_id).value,
+        "mode": profile.mode.value,
+        "status": profile.status.value,
         "proxy_id": profile.proxy_id,
         "user_agent": profile.user_agent,
         "timezone": profile.timezone,
         "locale": profile.locale,
         "memory_mb": metrics.get("memory_mb", 0),
         "cpu_percent": metrics.get("cpu_percent", 0),
-        "script_code": profile.script_code,
+        "scripts": profile.scripts,
+        "requirements": profile.requirements,
         "memory_threshold_mb": profile.memory_threshold_mb,
         "created_at": profile.created_at.isoformat()
     }
@@ -679,60 +1840,152 @@ async def get_profile(profile_id: str, _=verify_api_key):
 async def start_profile(
     profile_id: str,
     accounts: Dict[str, dict],
-    _=verify_api_key
+    _=verify_api_key,
+    db: AsyncSession = Depends(get_db)
 ):
-    """Start a profile"""
-    if profile_id not in profiles:
+    """Start a profile (Launch browser and run scripts)"""
+    global command_center_id
+
+    result = await db.execute(select(DbProfile).where(DbProfile.id == profile_id))
+    profile = result.scalar_one_or_none()
+
+    if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    profile = profiles[profile_id]
+    # Double check Command Center constraint on start
+    if profile.mode == ProfileMode.COMMAND_CENTER:
+        if command_center_id and command_center_id != profile_id:
+             raise HTTPException(400, "A Command Center is already running.")
+
+    # Update Status in DB
+    profile.status = ProfileStatus.RUNNING
+    await db.commit()
+
     accounts_cache[profile_id] = accounts
+    display_str = "unknown"
 
     # Create context if not exists
     if profile_id not in context_manager.contexts:
-        await context_manager.create_profile(profile, accounts)
+        # --- FIX: Run Xvfb start in a thread to prevent blocking the server ---
+        loop = asyncio.get_event_loop()
+        try:
+            # Run the synchronous Xvfb start in an executor (thread)
+            display_str = await loop.run_in_executor(
+                None,
+                xvfb.start_display,
+                profile_id
+            )
+            logger.info(f"Assigned display {display_str} to profile {profile_id}")
+        except Exception as e:
+            logger.error(f"Failed to start Xvfb for {profile_id}: {e}")
+            profile.status = ProfileStatus.CRASHED
+            await db.commit()
+            raise HTTPException(500, "Failed to initialize virtual display")
+
+        # Convert DB profile to Pydantic for context manager compatibility
+        # Using model_validate (Pydantic v2) or from_orm (v1) depending on setup
+        # We construct manually here to be safe across versions
+        profile_data = {
+            "id": profile.id,
+            "name": profile.name,
+            "mode": profile.mode,
+            "proxy_id": profile.proxy_id,
+            "user_agent": profile.user_agent,
+            "timezone": profile.timezone,
+            "locale": profile.locale,
+            "geolocation": profile.geolocation,
+            "scripts": profile.scripts,
+            "requirements": profile.requirements,
+            "memory_threshold_mb": profile.memory_threshold_mb,
+            "status": profile.status,
+            "created_at": profile.created_at
+        }
+        profile_pydantic = Profile(**profile_data)
+
+        await context_manager.create_profile(profile_pydantic, accounts, display_str)
+    else:
+        info = xvfb.active_displays.get(profile_id)
+        if info:
+            display_str = f":{info[1]}"
 
     await context_manager.start_profile(profile_id)
 
-    return {"status": "started"}
+    return {"status": "started", "display": display_str}
 
 
 @app.post("/profiles/{profile_id}/pause")
-async def pause_profile(profile_id: str, _=verify_api_key):
+async def pause_profile(profile_id: str, _=verify_api_key, db: AsyncSession = Depends(get_db)):
     """Pause a profile"""
-    if profile_id not in profiles:
+    result = await db.execute(select(DbProfile).where(DbProfile.id == profile_id))
+    profile = result.scalar_one_or_none()
+
+    if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
     await context_manager.pause_profile(profile_id)
+
+    profile.status = ProfileStatus.PAUSED
+    await db.commit()
+
     return {"status": "paused"}
 
 
 @app.post("/profiles/{profile_id}/stop")
-async def stop_profile(profile_id: str, _=verify_api_key):
+async def stop_profile(profile_id: str, _=verify_api_key, db: AsyncSession = Depends(get_db)):
     """Stop a profile"""
-    if profile_id not in profiles:
+    global command_center_id
+
+    result = await db.execute(select(DbProfile).where(DbProfile.id == profile_id))
+    profile = result.scalar_one_or_none()
+
+    if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
     await context_manager.stop_profile(profile_id)
+    xvfb.stop_display(profile_id)
+
+    profile.status = ProfileStatus.STOPPED
+    await db.commit()
+
+    if command_center_id == profile_id:
+        logger.info(f"Command Center {profile_id} stopped.")
+        command_center_id = None
+
     return {"status": "stopped"}
 
 
 @app.delete("/profiles/{profile_id}")
-async def delete_profile(profile_id: str, _=verify_api_key):
+async def delete_profile(profile_id: str, _=verify_api_key, db: AsyncSession = Depends(get_db)):
     """Delete a profile"""
-    if profile_id not in profiles:
+    global command_center_id
+
+    result = await db.execute(select(DbProfile).where(DbProfile.id == profile_id))
+    profile = result.scalar_one_or_none()
+
+    if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    # Stop if running
     if profile_id in context_manager.contexts:
         await context_manager.stop_profile(profile_id)
 
-    del profiles[profile_id]
+    if profile_id in xvfb.active_displays:
+        xvfb.stop_display(profile_id)
+
+    await db.delete(profile)
+    await db.commit()
+
     if profile_id in accounts_cache:
         del accounts_cache[profile_id]
 
+    if command_center_id == profile_id:
+        command_center_id = None
+
     return {"status": "deleted"}
 
+
+# ---------------------------------------------------------
+# SCREENSHOTS & STREAMING
+# ---------------------------------------------------------
 
 @app.get("/profiles/{profile_id}/screen")
 async def get_screen(profile_id: str, _=verify_api_key):
@@ -850,6 +2103,10 @@ async def get_metrics(profile_id: str, _=verify_api_key):
     return metrics
 
 
+# ---------------------------------------------------------
+# MAIN ENTRY POINT
+# ---------------------------------------------------------
+
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description="Browser Farm Server")
@@ -871,622 +2128,400 @@ def main():
 if __name__ == "__main__":
     main()
 
-server/src/script_runner.py
+server/src/utils.py
 
-Here is the fully updated `server/src/script_runner.py` with the critical concurrency fix applied. I have removed the unsafe `os.environ` usage and injected the `get_account` function directly into the script namespace.
-
-```python
-import asyncio
-import logging
+import secrets
+import string
+import psutil
+import platform
+import threading
+import time
 from pathlib import Path
-from typing import Dict, Optional
-from playwright.async_api import BrowserContext
-from .models import ProfileStatus
 
-logger = logging.getLogger(__name__)
+# ---------------------------------------------------------
+# BACKGROUND SYSTEM MONITOR (Non-Blocking)
+# ---------------------------------------------------------
 
+# Global cache for system stats
+_cached_stats = {
+    "cpu_percent": 0.0,
+    "memory": {
+        "total_mb": 0,
+        "used_mb": 0,
+        "available_mb": 0,
+        "percent": 0.0,
+    }
+}
 
-def _create_get_account_function(accounts: Dict[str, dict]):
+def _monitor_loop():
     """
-    Creates a closure for the get_account function bound to a specific
-    set of accounts. This ensures thread-safety for concurrent profiles.
+    Background thread that updates system stats every 2 seconds.
+    This ensures that API calls to /health are non-blocking.
     """
-    def get_account(account_id: str) -> dict:
-        if account_id not in accounts:
-            raise ValueError(f"Account {account_id} not found")
-        return accounts[account_id]
-    return get_account
+    # Give a small initial delay to allow app to boot
+    time.sleep(1)
 
-
-class ScriptRunner:
-    def __init__(
-        self,
-        profile_id: str,
-        context: BrowserContext,
-        script_code: str,
-        accounts: Dict[str, dict],
-        log_dir: Path
-    ):
-        self.profile_id = profile_id
-        self.context = context
-        self.script_code = script_code
-        self.accounts = accounts
-        self.log_dir = log_dir
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-
-        self.task: Optional[asyncio.Task] = None
-        self.status = ProfileStatus.IDLE
-
-        # Set up logging
-        self.log_file = self.log_dir / "script.log"
-        self.setup_logging()
-
-    def setup_logging(self):
-        """Set up logging for this script"""
-        file_handler = logging.FileHandler(self.log_file)
-        file_handler.setLevel(logging.INFO)
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(formatter)
-
-        script_logger = logging.getLogger(f"script.{self.profile_id}")
-        script_logger.addHandler(file_handler)
-        script_logger.setLevel(logging.INFO)
-
-    async def start(self):
-        """Start running the script"""
-        if self.task and not self.task.done():
-            logger.warning(f"Script {self.profile_id} already running")
-            return
-
-        self.status = ProfileStatus.RUNNING
-        self.task = asyncio.create_task(self._run())
-        logger.info(f"Started script {self.profile_id}")
-
-    async def pause(self):
-        """Pause the script"""
-        if self.task:
-            self.task.cancel()
-            try:
-                await self.task
-            except asyncio.CancelledError:
-                pass
-
-        self.status = ProfileStatus.PAUSED
-        logger.info(f"Paused script {self.profile_id}")
-
-    async def stop(self):
-        """Stop the script"""
-        if self.task:
-            self.task.cancel()
-            try:
-                await self.task
-            except asyncio.CancelledError:
-                pass
-
-        self.status = ProfileStatus.STOPPED
-        logger.info(f"Stopped script {self.profile_id}")
-
-    async def _run(self):
-        """Run the user's script"""
-        script_logger = logging.getLogger(f"script.{self.profile_id}")
-
+    while True:
         try:
-            script_logger.info("Script started")
+            # 1. Get CPU (This blocks for 1 second, but in a separate thread so it's fine)
+            cpu = psutil.cpu_percent(interval=1)
 
-            # --- CRITICAL FIX START ---
-            # Create the specific get_account function for THIS profile's accounts.
-            # This replaces the unsafe os.environ method, preventing race conditions
-            # when multiple profiles run on the same server.
-            injected_get_account = _create_get_account_function(self.accounts)
+            # 2. Get Memory
+            mem = psutil.virtual_memory()
 
-            # Create a namespace with context and the injected function available
-            namespace = {
-                "context": self.context,
-                "asyncio": asyncio,
-                "__name__": "__main__",
-                "get_account": injected_get_account,  # Injected here
+            # 3. Update Cache
+            _cached_stats["cpu_percent"] = cpu
+            _cached_stats["memory"] = {
+                "total_mb": int(mem.total / (1024 * 1024)),
+                "used_mb": int(mem.used / (1024 * 1024)),
+                "available_mb": int(mem.available / (1024 * 1024)),
+                "percent": mem.percent,
             }
 
-            # Execute the script code
-            exec(self.script_code, namespace)
-
-            # If script has a main function, run it
-            if "main" in namespace and callable(namespace["main"]):
-                await namespace["main"](self.context)
-            # --- CRITICAL FIX END ---
-
-            script_logger.info("Script completed")
-            self.status = ProfileStatus.IDLE
-
-        except asyncio.CancelledError:
-            script_logger.info("Script cancelled")
-            raise
         except Exception as e:
-            script_logger.error(f"Script error: {e}", exc_info=True)
-            self.status = ProfileStatus.CRASHED
-            raise
-```
+            # Log error or just ignore to keep thread alive
+            print(f"Error in monitor loop: {e}")
+            time.sleep(2)
 
-server/src/models.py
-
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
-from datetime import datetime
-from enum import Enum
+# Start the background thread immediately on import
+_monitor_thread = threading.Thread(target=_monitor_loop, daemon=True)
+_monitor_thread.start()
 
 
-class ProfileStatus(str, Enum):
-    IDLE = "idle"
-    RUNNING = "running"
-    PAUSED = "paused"
-    STOPPED = "stopped"
-    CRASHED = "crashed"
+# ---------------------------------------------------------
+# PUBLIC API
+# ---------------------------------------------------------
+
+def generate_api_key() -> str:
+    """Generate a random API key"""
+    alphabet = string.ascii_letters + string.digits
+    return "bf_" + "".join(secrets.choice(alphabet) for _ in range(32))
 
 
-class ProxyConfig(BaseModel):
-    id: str
-    host: str
-    port: int
-    protocol: str = "http"
-    username: Optional[str] = None
-    password: Optional[str] = None
+def get_system_info() -> dict:
+    """Get system information"""
+    return {
+        "platform": platform.system(),
+        "platform_version": platform.version(),
+        "architecture": platform.machine(),
+        "cpu_count": psutil.cpu_count(),
+        "memory_total": psutil.virtual_memory().total,
+    }
 
 
-class Account(BaseModel):
-    """Account credentials for automation"""
-    id: str
-    platform: str
-    platform_url: Optional[str] = None
-    username: str
-    password: str
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    notes: Optional[str] = None
-    status: str = "active"
-    banned: bool = False
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    last_used: Optional[datetime] = None
+def get_memory_usage() -> dict:
+    """
+    Get current memory usage (Non-blocking).
+    Returns cached data updated by background thread.
+    """
+    return _cached_stats["memory"]
 
 
-class Geolocation(BaseModel):
-    lat: float
-    lng: float
+def get_cpu_usage() -> float:
+    """
+    Get current CPU usage percentage (Non-blocking).
+    Returns cached data updated by background thread.
+    """
+    return _cached_stats["cpu_percent"]
 
+# Alias for compatibility with server.py imports
+def get_cached_cpu_usage() -> float:
+    """
+    Alias for get_cpu_usage to match server.py imports.
+    """
+    return get_cpu_usage()
 
-class Profile(BaseModel):
-    id: str
-    name: str
-    proxy_id: str
-    user_agent: Optional[str] = None
-    timezone: str = "America/New_York"
-    locale: str = "en-US"
-    geolocation: Optional[Geolocation] = None
-    script_code: str
-    restart_script_code: Optional[str] = None
-    memory_threshold_mb: int = 400
-    status: ProfileStatus = ProfileStatus.IDLE
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-
-
-class ProfileCreate(BaseModel):
-    name: str
-    proxy_id: str
-    user_agent: Optional[str] = None
-    timezone: str = "America/New_York"
-    locale: str = "en-US"
-    geolocation: Optional[Geolocation] = None
-    script_code: str
-    restart_script_code: Optional[str] = None
-    memory_threshold_mb: int = 400
-
-
-class ProfileMetrics(BaseModel):
-    memory_mb: int
-    memory_limit_mb: int
-    cpu_percent: float
-    uptime_seconds: int
-    network_rx_bytes: int = 0
-    network_tx_bytes: int = 0
-
-
-class Screenshot(BaseModel):
-    id: str
-    timestamp: datetime
-    url: str
-    size_bytes: int
-
-
-class Video(BaseModel):
-    id: str
-    timestamp: datetime
-    url: str
-    duration_seconds: int
-    size_bytes: int
-
-
-class LogEntry(BaseModel):
-    timestamp: datetime
-    level: str
-    message: str
-
-
-class ServerHealth(BaseModel):
-    status: str
-    version: str
-    max_contexts: int
-    current_contexts: int
-    memory_total_mb: int
-    memory_used_mb: int
-    memory_available_mb: int
-    cpu_usage: float
-    uptime_seconds: int
-
-server/src/memomory_monitor.py
+server/src/vnc_handler.py
 
 import asyncio
-import psutil
 import logging
-from typing import Callable, Optional
-from playwright.async_api import BrowserContext
+from typing import Dict
+from playwright.async_api import Page
 
 logger = logging.getLogger(__name__)
 
 
-class MemoryMonitor:
-    def __init__(
-        self,
-        profile_id: str,
-        context: BrowserContext,
-        threshold_mb: int,
-        on_threshold_exceeded: Callable
-    ):
-        self.profile_id = profile_id
-        self.context = context
-        self.threshold_mb = threshold_mb
-        self.on_threshold_exceeded = on_threshold_exceeded
+class VNCHandler:
+    def __init__(self, page: Page):
+        self.page = page
 
-        self.task: Optional[asyncio.Task] = None
-        self.running = False
+    async def handle_mouse_move(self, x: int, y: int):
+        """Handle mouse move event"""
+        await self.page.mouse.move(x, y)
 
-        self.current_memory_mb = 0
-        self.cpu_percent = 0.0
+    async def handle_mouse_click(self, x: int, y: int, button: str = "left"):
+        """Handle mouse click event"""
+        await self.page.mouse.click(x, y, button=button)
+
+    async def handle_keyboard(self, text: str):
+        """Handle keyboard input"""
+        await self.page.keyboard.type(text)
+
+    async def handle_scroll(self, delta_y: int):
+        """Handle scroll event"""
+        await self.page.mouse.wheel(0, delta_y)
+
+    async def process_action(self, action: Dict):
+        """Process a control action"""
+        action_type = action.get("type")
+
+        if action_type == "mouse_move":
+            await self.handle_mouse_move(action["x"], action["y"])
+
+        elif action_type == "mouse_click":
+            await self.handle_mouse_click(
+                action["x"],
+                action["y"],
+                action.get("button", "left")
+            )
+
+        elif action_type == "keyboard":
+            await self.handle_keyboard(action["text"])
+
+        elif action_type == "scroll":
+            await self.handle_scroll(action["delta_y"])
+
+server/src/xvfb_manager.py
+
+import subprocess
+import os
+import time
+import logging
+from typing import Dict, Tuple, Optional
+
+logger = logging.getLogger(__name__)
+
+
+class XvfbManager:
+    def __init__(self, base_display: int = 99, resolution: str = "1920x1080x24"):
+        """
+        Initialize Xvfb Manager.
+
+        Args:
+            base_display: The starting display number (e.g., 99 means :99)
+            resolution: Screen resolution and depth string.
+        """
+        self.base_display = base_display
+        self.resolution = resolution
+
+        # Global/Legacy process (kept for backwards compatibility or server-wide needs)
+        self.process: Optional[subprocess.Popen] = None
+        self.display: str = f":{base_display}"
+
+        # Per-Profile Management
+        # Structure: { profile_id: (process_handle, display_number) }
+        # FIXED: Renamed from managed_displays to active_displays to match server.py
+        self.active_displays: Dict[str, Tuple[subprocess.Popen, int]] = {}
+
+        # Track used display numbers to find available slots quickly
+        self._used_display_numbers: set = set()
+
+    # ==========================================
+    # Legacy Global Methods (Preserved)
+    # ==========================================
 
     def start(self):
-        """Start monitoring"""
-        if self.running:
-            return
-
-        self.running = True
-        self.task = asyncio.create_task(self._monitor())
-        logger.info(f"Started memory monitor for {self.profile_id}")
-
-    def stop(self):
-        """Stop monitoring"""
-        self.running = False
-        if self.task:
-            self.task.cancel()
-        logger.info(f"Stopped memory monitor for {self.profile_id}")
-
-    async def _monitor(self):
-        """Monitor memory usage"""
-        while self.running:
-            try:
-                # Get memory usage
-                memory_mb = await self._get_memory_usage()
-                self.current_memory_mb = memory_mb
-
-                # Get CPU usage
-                cpu = await self._get_cpu_usage()
-                self.cpu_percent = cpu
-
-                # Check threshold
-                if memory_mb > self.threshold_mb:
-                    logger.warning(
-                        f"Profile {self.profile_id} exceeded memory threshold: "
-                        f"{memory_mb}MB > {self.threshold_mb}MB"
-                    )
-                    self.on_threshold_exceeded()
-                    break
-
-                await asyncio.sleep(30)  # Check every 30 seconds
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in memory monitor: {e}")
-                await asyncio.sleep(30)
-
-    async def _get_memory_usage(self) -> int:
-        """Get memory usage in MB"""
+        """Start the default global Xvfb virtual display (Legacy/Default)"""
         try:
-            # Get browser process
-            pages = self.context.pages
-            if not pages:
-                return 0
+            if self._is_running(self.display):
+                logger.info(f"Xvfb already running on {self.display}")
+                os.environ["DISPLAY"] = self.display
+                return
 
-            # Get CDP session
-            page = pages[0]
-            client = await page.context.new_cdp_session(page)
+            cmd = [
+                "Xvfb",
+                self.display,
+                "-screen", "0", self.resolution,
+                "-ac",
+                "+extension", "GLX",
+                "+render",
+                "-noreset"
+            ]
 
-            # Get process info
-            result = await client.send("SystemInfo.getProcessInfo")
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
 
-            # Sum memory from all processes
-            total_memory = 0
-            for process in result.get("processInfo", []):
-                total_memory += process.get("cpuTime", 0)
+            time.sleep(2)  # Wait for Xvfb to be ready
 
-            # Fallback: use psutil
-            if total_memory == 0:
-                process = psutil.Process()
-                total_memory = process.memory_info().rss
+            # Verify it started
+            if not self._is_running(self.display):
+                 raise RuntimeError(f"Failed to start global Xvfb on {self.display}")
 
-            return int(total_memory / (1024 * 1024))  # Convert to MB
+            os.environ["DISPLAY"] = self.display
+            self._used_display_numbers.add(self.base_display)
+            logger.info(f"✓ Xvfb started on {self.display}")
 
         except Exception as e:
-            logger.error(f"Error getting memory usage: {e}")
-            return 0
+            logger.error(f"Failed to start Xvfb: {e}")
+            raise
 
-    async def _get_cpu_usage(self) -> float:
-        """Get CPU usage percentage"""
+    def stop(self):
+        """Stop the global Xvfb instance"""
+        if self.process:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+
+            if self.base_display in self._used_display_numbers:
+                self._used_display_numbers.remove(self.base_display)
+
+            logger.info("Global Xvfb stopped")
+
+    # ==========================================
+    # Per-Profile Methods (New)
+    # ==========================================
+
+    def start_display(self, profile_id: str) -> str:
+        """
+        Starts a dedicated Xvfb display for a specific profile.
+        This allows concurrent PyAutoGUI usage across multiple profiles.
+
+        Args:
+            profile_id: The unique ID of the profile.
+
+        Returns:
+            The display string (e.g., ":100") to be used for this profile.
+        """
+        # 1. Check if this profile already has a display
+        if profile_id in self.active_displays:
+            proc, display_num = self.active_displays[profile_id]
+            display_str = f":{display_num}"
+            logger.info(f"Reusing existing display {display_str} for profile {profile_id}")
+            return display_str
+
+        # 2. Find an available display number
+        display_num = self._find_available_display()
+        display_str = f":{display_num}"
+
         try:
-            process = psutil.Process()
-            return process.cpu_percent(interval=1)
-        except:
-            return 0.0
+            logger.info(f"Allocating display {display_str} for profile {profile_id}...")
 
-    def get_metrics(self) -> dict:
-        """Get current metrics"""
-        return {
-            "memory_mb": self.current_memory_mb,
-            "memory_limit_mb": self.threshold_mb,
-            "cpu_percent": self.cpu_percent,
-        }
+            # --- NEW: CLEANUP STALE LOCK FILES ---
+            # This fixes the "Xvfb failed to start" error caused by leftover lock files
+            lock_file = f"/tmp/.X{display_num}-lock"
+            if os.path.exists(lock_file):
+                logger.warning(f"Removing stale Xvfb lock file: {lock_file}")
+                try:
+                    os.remove(lock_file)
+                except OSError as e:
+                    logger.error(f"Failed to remove lock file: {e}")
+            # -------------------------------------
 
-server/src/context_manager.py
-
-import asyncio
-import uuid
-import logging
-from pathlib import Path
-from typing import Dict, Optional
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page
-from .models import Profile, ProfileStatus, ProxyConfig
-from .script_runner import ScriptRunner
-from .memory_monitor import MemoryMonitor
-
-logger = logging.getLogger(__name__)
-
-
-class ContextManager:
-    def __init__(self, data_dir: Path):
-        self.data_dir = data_dir
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-
-        self.browser: Optional[Browser] = None
-        self.playwright = None
-        self.contexts: Dict[str, BrowserContext] = {}
-        self.runners: Dict[str, ScriptRunner] = {}
-        self.monitors: Dict[str, MemoryMonitor] = {}
-        self.proxies: Dict[str, ProxyConfig] = {}
-
-        # Create directories
-        (self.data_dir / "screenshots").mkdir(exist_ok=True)
-        (self.data_dir / "videos").mkdir(exist_ok=True)
-        (self.data_dir / "logs").mkdir(exist_ok=True)
-
-    async def start(self):
-        """Start browser"""
-        self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(
-            headless=False,  # Headful for real rendering
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
+            # 3. Launch Xvfb
+            cmd = [
+                "Xvfb",
+                display_str,
+                "-screen", "0", self.resolution,
+                "-ac",
+                "+extension", "GLX",
+                "+render",
+                "-noreset"
             ]
-        )
-        logger.info("✓ Chromium launched")
 
-    async def stop(self):
-        """Stop browser and all contexts"""
-        for profile_id in list(self.contexts.keys()):
-            await self.stop_profile(profile_id)
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE # Capture stderr to debug if it fails
+            )
 
-        if self.browser:
-            await self.browser.close()
-        if self.playwright:
-            await self.playwright.stop()
+            # 4. Wait and verify
+            time.sleep(1)
+            if not self._is_running(display_str):
+                # Try to read stderr if available
+                stderr_output = ""
+                try:
+                    stderr_output = proc.stderr.read().decode()
+                except:
+                    pass
+                raise RuntimeError(f"Xvfb failed to start on {display_str}. Stderr: {stderr_output}")
 
-        logger.info("Browser stopped")
+            # 5. Register
+            self.active_displays[profile_id] = (proc, display_num)
+            self._used_display_numbers.add(display_num)
 
-    def register_proxy(self, proxy: ProxyConfig):
-        """Register a proxy for use"""
-        self.proxies[proxy.id] = proxy
+            logger.info(f"✓ Xvfb started on {display_str} for profile {profile_id}")
+            return display_str
 
-    async def create_profile(self, profile: Profile, accounts: Dict[str, dict]):
-        """Create and start a new browser context profile"""
-        if profile.id in self.contexts:
-            raise ValueError(f"Profile {profile.id} already exists")
+        except Exception as e:
+            logger.error(f"Failed to start display for {profile_id}: {e}")
+            # Clean up if failed
+            if display_num in self._used_display_numbers:
+                self._used_display_numbers.remove(display_num)
+            raise
 
-        # Get proxy
-        if profile.proxy_id not in self.proxies:
-            raise ValueError(f"Proxy {profile.proxy_id} not found")
-        proxy = self.proxies[profile.proxy_id]
+    def stop_display(self, profile_id: str):
+        """
+        Stops the Xvfb display associated with a specific profile.
+        """
+        if profile_id not in self.active_displays:
+            logger.warning(f"No managed display found for profile {profile_id}")
+            return
 
-        # Create context
-        context = await self.browser.new_context(
-            proxy={
-                "server": f"{proxy.protocol}://{proxy.host}:{proxy.port}",
-                "username": proxy.username,
-                "password": proxy.password,
-            } if proxy.username else {
-                "server": f"{proxy.protocol}://{proxy.host}:{proxy.port}",
-            },
-            user_agent=profile.user_agent,
-            locale=profile.locale,
-            timezone_id=profile.timezone,
-            geolocation={"latitude": profile.geolocation.lat, "longitude": profile.geolocation.lng} if profile.geolocation else None,
-            permissions=["geolocation"] if profile.geolocation else [],
-            record_video_dir=str(self.data_dir / "videos" / profile.id) if True else None,
-            record_video_size={"width": 1920, "height": 1080},
-        )
+        proc, display_num = self.active_displays[profile_id]
+        display_str = f":{display_num}"
 
-        self.contexts[profile.id] = context
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        except Exception as e:
+            logger.error(f"Error stopping display for {profile_id}: {e}")
+        finally:
+            # Cleanup references
+            del self.active_displays[profile_id]
+            if display_num in self._used_display_numbers:
+                self._used_display_numbers.remove(display_num)
+            logger.info(f"✓ Xvfb stopped on {display_str} for profile {profile_id}")
 
-        # Create script runner
-        runner = ScriptRunner(
-            profile_id=profile.id,
-            context=context,
-            script_code=profile.script_code,
-            accounts=accounts,
-            log_dir=self.data_dir / "logs" / profile.id
-        )
-        self.runners[profile.id] = runner
+    # ==========================================
+    # Helpers
+    # ==========================================
 
-        # Create memory monitor
-        monitor = MemoryMonitor(
-            profile_id=profile.id,
-            context=context,
-            threshold_mb=profile.memory_threshold_mb,
-            on_threshold_exceeded=lambda: asyncio.create_task(self.restart_profile(profile.id, profile, accounts))
-        )
-        self.monitors[profile.id] = monitor
+    def _find_available_display(self) -> int:
+        """Finds the next available display number."""
+        # Start searching from base_display + 1 (assuming base is reserved for global)
+        candidate = self.base_display + 1
+        while True:
+            if candidate not in self._used_display_numbers:
+                # Double check it's not used by an external process
+                if not self._is_running(f":{candidate}"):
+                    return candidate
+            candidate += 1
+            # Safety break to prevent infinite loops in extreme cases
+            if candidate > self.base_display + 1000:
+                raise RuntimeError("Could not find an available display number")
 
-        logger.info(f"Created profile {profile.id}")
+    def _is_running(self, display: str) -> bool:
+        """Check if Xvfb is running on a specific display"""
+        try:
+            subprocess.run(
+                ["xdpyinfo", "-display", display],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+                timeout=2
+            )
+            return True
+        except:
+            return False
 
-        return profile.id
+    def stop_all(self):
+        """Stops all managed displays and the global instance."""
+        # Stop all profile-specific displays
+        # Convert to list to avoid modification during iteration
+        for profile_id in list(self.active_displays.keys()):
+            self.stop_display(profile_id)
 
-    async def start_profile(self, profile_id: str):
-        """Start running the profile's script"""
-        if profile_id not in self.runners:
-            raise ValueError(f"Profile {profile_id} not found")
+        # Stop global
+        self.stop()
 
-        runner = self.runners[profile_id]
-        await runner.start()
-
-        monitor = self.monitors[profile_id]
-        monitor.start()
-
-        logger.info(f"Started profile {profile_id}")
-
-    async def pause_profile(self, profile_id: str):
-        """Pause the profile's script"""
-        if profile_id not in self.runners:
-            raise ValueError(f"Profile {profile_id} not found")
-
-        runner = self.runners[profile_id]
-        await runner.pause()
-
-        logger.info(f"Paused profile {profile_id}")
-
-    async def stop_profile(self, profile_id: str):
-        """Stop and remove a profile"""
-        if profile_id not in self.contexts:
-            raise ValueError(f"Profile {profile_id} not found")
-
-        # Stop runner
-        if profile_id in self.runners:
-            await self.runners[profile_id].stop()
-            del self.runners[profile_id]
-
-        # Stop monitor
-        if profile_id in self.monitors:
-            self.monitors[profile_id].stop()
-            del self.monitors[profile_id]
-
-        # Close context
-        context = self.contexts[profile_id]
-        await context.close()
-        del self.contexts[profile_id]
-
-        logger.info(f"Stopped profile {profile_id}")
-
-    async def restart_profile(self, profile_id: str, profile: Profile, accounts: Dict[str, dict]):
-        """Restart a profile"""
-        logger.info(f"Restarting profile {profile_id}...")
-
-        # Stop
-        await self.stop_profile(profile_id)
-
-        # Start again
-        await self.create_profile(profile, accounts)
-        await self.start_profile(profile_id)
-
-        logger.info(f"Profile {profile_id} restarted")
-
-    async def get_screenshot(self, profile_id: str) -> bytes:
-        """Take screenshot of profile"""
-        if profile_id not in self.contexts:
-            raise ValueError(f"Profile {profile_id} not found")
-
-        context = self.contexts[profile_id]
-        pages = context.pages
-
-        if not pages:
-            raise ValueError("No pages open in context")
-
-        page = pages[0]
-        screenshot = await page.screenshot(full_page=False)
-
-        return screenshot
-
-    async def save_screenshot(self, profile_id: str) -> str:
-        """Save screenshot to disk"""
-        screenshot = await self.get_screenshot(profile_id)
-
-        timestamp = int(asyncio.get_event_loop().time())
-        filename = f"{profile_id}_{timestamp}.png"
-        filepath = self.data_dir / "screenshots" / filename
-
-        with open(filepath, "wb") as f:
-            f.write(screenshot)
-
-        return filename
-
-    def get_profile_status(self, profile_id: str) -> ProfileStatus:
-        """Get current status of profile"""
-        if profile_id not in self.runners:
-            return ProfileStatus.STOPPED
-
-        runner = self.runners[profile_id]
-        return runner.status
-
-    def get_profile_metrics(self, profile_id: str) -> dict:
-        """Get metrics for profile"""
-        if profile_id not in self.monitors:
-            return {}
-
-        monitor = self.monitors[profile_id]
-        return monitor.get_metrics()
-
-server/src/__init__.py
-
-"""Browser Farm - Distributed Browser Automation Platform"""
-
-__version__ = "1.0.0"
-
-from .models import Profile, ProxyConfig, Account
-
-__all__ = ["Profile", "ProxyConfig", "Account"]
-
-
-def get_account(account_id: str) -> dict:
-    """
-    Get account credentials at runtime.
-    This function is injected by the server when running user scripts.
-    """
-    import os
-    import json
-
-    accounts_json = os.environ.get("BROWSER_FARM_ACCOUNTS", "{}")
-    accounts = json.loads(accounts_json)
-
-    if account_id not in accounts:
-        raise ValueError(f"Account {account_id} not found")
-
-    return accounts[account_id]
-
+        logger.info("All Xvfb instances stopped.")
 
 client/tailwind.config.js
 
@@ -1591,25 +2626,6 @@ module.exports = {
   plugins: [require("@tailwindcss/forms")],
 };
 
-client/public/preload.js
-
-const { contextBridge, ipcRenderer } = require("electron");
-
-// Expose protected methods that allow the renderer process to use
-// the ipcRenderer without exposing the entire object
-contextBridge.exposeInMainWorld("electronStore", {
-  get: (key) => ipcRenderer.invoke("store-get", key),
-  set: (key, value) => ipcRenderer.invoke("store-set", key, value),
-  delete: (key) => ipcRenderer.invoke("store-delete", key),
-  clear: () => ipcRenderer.invoke("store-clear"),
-  has: (key) => ipcRenderer.invoke("store-has", key),
-  getAll: () => ipcRenderer.invoke("store-get-all"),
-});
-
-contextBridge.exposeInMainWorld("electronAPI", {
-  getAppPath: () => ipcRenderer.invoke("get-app-path"),
-});
-
 client/postcss.config.js
 
 module.exports = {
@@ -1712,121 +2728,6 @@ client/package.json
   }
 }
 
-client/public/electron.js
-
-const { app, BrowserWindow, ipcMain } = require("electron");
-const path = require("path");
-
-let Store;
-try {
-  Store = require("electron-store").default;
-} catch (e) {
-  Store = require("electron-store");
-}
-
-const isDev = process.argv.includes("--dev");
-
-// Disable sandbox on Linux for development
-if (process.platform === "linux") {
-  app.commandLine.appendSwitch("no-sandbox");
-}
-
-// Initialize electron-store
-const store = new Store({
-  defaults: {
-    servers: [],
-    proxies: [],
-    accounts: [],
-    profiles: [],
-    settings: {
-      homeScreenCount: 4,
-      homeScreens: [],
-    },
-  },
-});
-
-let mainWindow;
-
-function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 1200,
-    minHeight: 700,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      preload: path.join(__dirname, "preload.js"),
-      sandbox: false, // Disable sandbox
-    },
-    backgroundColor: "#0f172a",
-    show: false,
-    frame: true,
-    titleBarStyle: "default",
-  });
-
-  if (isDev) {
-    mainWindow.loadURL("http://localhost:3000");
-    mainWindow.webContents.openDevTools();
-  } else {
-    mainWindow.loadFile(path.join(__dirname, "index.html"));
-  }
-
-  mainWindow.once("ready-to-show", () => {
-    mainWindow.show();
-  });
-
-  mainWindow.on("closed", () => {
-    mainWindow = null;
-  });
-}
-
-// IPC Handlers for Store
-ipcMain.handle("store-get", (event, key) => {
-  return store.get(key);
-});
-
-ipcMain.handle("store-set", (event, key, value) => {
-  store.set(key, value);
-  return true;
-});
-
-ipcMain.handle("store-delete", (event, key) => {
-  store.delete(key);
-  return true;
-});
-
-ipcMain.handle("store-clear", () => {
-  store.clear();
-  return true;
-});
-
-ipcMain.handle("store-has", (event, key) => {
-  return store.has(key);
-});
-
-ipcMain.handle("store-get-all", () => {
-  return store.store;
-});
-
-ipcMain.handle("get-app-path", () => {
-  return app.getPath("userData");
-});
-
-app.whenReady().then(createWindow);
-
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
-});
-
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
-});
-
 client/craco.config.js
 
 module.exports = {
@@ -1843,8 +2744,6 @@ module.exports = {
     },
   },
 };
-
-client/craco
 
 client/src/theme.js
 
@@ -2010,7 +2909,7 @@ client/src/App.js
 
 import React, { useState, useEffect } from "react";
 import {
-  BrowserRouter as Router,
+  HashRouter as Router,
   Routes,
   Route,
   Navigate,
@@ -2024,17 +2923,20 @@ import Proxies from "./pages/Proxies";
 import Accounts from "./pages/Accounts";
 import Profiles from "./pages/Profiles";
 import Monitoring from "./pages/Monitoring";
+import Scripts from "./pages/Scripts";
+import { ServerHealthProvider } from "./context/ServerHealthContext"; // Import the Provider
 
 function App() {
   const [showStartup, setShowStartup] = useState(true);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     // Show startup animation for 3 seconds
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       setShowStartup(false);
-      setLoading(false);
     }, 3000);
+
+    // Cleanup timer on unmount
+    return () => clearTimeout(timer);
   }, []);
 
   if (showStartup) {
@@ -2042,25 +2944,35 @@ function App() {
   }
 
   return (
-    <Router>
-      <div className="flex h-screen bg-dark-950 overflow-hidden">
-        <Sidebar />
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <Header />
-          <main className="flex-1 overflow-auto p-6">
-            <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/servers" element={<Servers />} />
-              <Route path="/proxies" element={<Proxies />} />
-              <Route path="/accounts" element={<Accounts />} />
-              <Route path="/profiles" element={<Profiles />} />
-              <Route path="/monitoring/:profileId" element={<Monitoring />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </main>
+    // Wrap the entire application in the ServerHealthProvider
+    // This ensures global server status is available everywhere
+    <ServerHealthProvider>
+      <Router>
+        <div className="flex h-screen bg-dark-950 overflow-hidden">
+          <Sidebar />
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <Header />
+            <main className="flex-1 overflow-auto p-6">
+              <Routes>
+                <Route path="/" element={<Home />} />
+                {/*
+                   We no longer need to pass 'servers' or 'health' as props here.
+                   The ServerList component now uses the 'useServerHealth' hook
+                   to get this data directly from the context.
+                */}
+                <Route path="/servers" element={<Servers />} />
+                <Route path="/proxies" element={<Proxies />} />
+                <Route path="/accounts" element={<Accounts />} />
+                <Route path="/profiles" element={<Profiles />} />
+                <Route path="/scripts" element={<Scripts />} />
+                <Route path="/monitoring/:profileId" element={<Monitoring />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </main>
+          </div>
         </div>
-      </div>
-    </Router>
+      </Router>
+    </ServerHealthProvider>
   );
 }
 
@@ -2108,6 +3020,8 @@ class Store {
       proxies: [],
       accounts: [],
       profiles: [],
+      scripts: [], // Script Library storage
+      activeCommandCenterId: null, // NEW: Track the active Command Center profile ID
       settings: {
         homeScreenCount: 4,
         homeScreens: [],
@@ -2184,6 +3098,21 @@ function Servers() {
 }
 
 export default Servers;
+
+client/src/pages/Scripts.jsx
+
+import React from "react";
+import ScriptLibrary from "../components/ScriptLibrary";
+
+function Scripts() {
+  return (
+    <div className="animate-fade-in">
+      <ScriptLibrary />
+    </div>
+  );
+}
+
+export default Scripts;
 
 client/src/pages/Proxies.jsx
 
@@ -2765,6 +3694,123 @@ function Accounts() {
 
 export default Accounts;
 
+client/src/context/ServerHealthContext.jsx
+
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+} from "react";
+import store from "../store/db";
+import { apiClient } from "../api/client";
+
+// Create the Context
+const ServerHealthContext = createContext();
+
+// Custom Hook to use the Context
+export const useServerHealth = () => {
+  return useContext(ServerHealthContext);
+};
+
+// The Provider Component
+export const ServerHealthProvider = ({ children }) => {
+  const [servers, setServers] = useState([]);
+  const [healthData, setHealthData] = useState({});
+  // Structure: { "server_id": { status: "online", cpu: 10, ... }, ... }
+
+  // 1. Load Servers from Store on Mount
+  useEffect(() => {
+    const loadInitialServers = async () => {
+      try {
+        const storedServers = (await store.get("servers")) || [];
+        setServers(storedServers);
+
+        // Register all loaded servers with the API Client
+        storedServers.forEach((server) => {
+          apiClient.addServer(server.id, server.url, server.apiKey);
+        });
+
+        // Trigger initial health check immediately
+        performHealthCheck(storedServers);
+      } catch (error) {
+        console.error("Failed to load servers from store:", error);
+      }
+    };
+
+    loadInitialServers();
+  }, []);
+
+  // 2. Health Check Logic
+  const performHealthCheck = useCallback(async (currentServers) => {
+    const newHealthData = {};
+
+    // Use Promise.all to check all servers in parallel
+    await Promise.all(
+      currentServers.map(async (server) => {
+        try {
+          // Call the health endpoint via apiClient
+          const data = await apiClient.getHealth(server.id);
+          newHealthData[server.id] = {
+            status: "online",
+            ...data,
+          };
+        } catch (error) {
+          // If error (timeout, network, 500), mark as offline
+          newHealthData[server.id] = {
+            status: "offline",
+          };
+        }
+      }),
+    );
+
+    setHealthData(newHealthData);
+  }, []);
+
+  // 3. Setup Global Polling Interval (runs regardless of active tab)
+  useEffect(() => {
+    // Only poll if we have servers
+    if (servers.length === 0) return;
+
+    const intervalId = setInterval(() => {
+      performHealthCheck(servers);
+    }, 30000); // Check every 30 seconds
+
+    // Cleanup interval on component unmount
+    return () => clearInterval(intervalId);
+  }, [servers, performHealthCheck]);
+
+  // 4. Method to refresh servers manually (used after Add/Delete)
+  const refreshServers = async () => {
+    const storedServers = (await store.get("servers")) || [];
+    setServers(storedServers);
+
+    // Re-register servers with API client
+    storedServers.forEach((server) => {
+      apiClient.addServer(server.id, server.url, server.apiKey);
+    });
+
+    // Force immediate health check after refresh
+    await performHealthCheck(storedServers);
+  };
+
+  // Value provided to consumers
+  const value = {
+    servers,
+    healthData,
+    refreshServers,
+  };
+
+  return (
+    <ServerHealthContext.Provider value={value}>
+      {children}
+    </ServerHealthContext.Provider>
+  );
+};
+
+export default ServerHealthContext;
+
 client/src/components/Startup.jsx
 
 import React from "react";
@@ -2853,7 +3899,15 @@ client/src/components/Sidebar.jsx
 
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Home, Server, Globe, Users, Layout, Activity } from "lucide-react";
+import {
+  Home,
+  Server,
+  Globe,
+  Users,
+  Layout,
+  Activity,
+  Code,
+} from "lucide-react";
 
 const menuItems = [
   { path: "/", icon: Home, label: "Home" },
@@ -2861,6 +3915,7 @@ const menuItems = [
   { path: "/proxies", icon: Globe, label: "Proxies" },
   { path: "/accounts", icon: Users, label: "Accounts" },
   { path: "/profiles", icon: Layout, label: "Profiles" },
+  { path: "/scripts", icon: Code, label: "Scripts" },
 ];
 
 function Sidebar() {
@@ -2912,80 +3967,26 @@ export default Sidebar;
 
 client/src/components/ServerList.jsx
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState } from "react";
 import { Plus, Server, Trash2, CheckCircle, XCircle } from "lucide-react";
 import store from "../store/db";
 import { apiClient } from "../api/client";
+import { useServerHealth } from "../context/ServerHealthContext";
 
 function ServerList() {
-  const [servers, setServers] = useState([]);
+  // Consume Global Context
+  const { servers, healthData, refreshServers } = useServerHealth();
+
+  // Local UI State
   const [showAddModal, setShowAddModal] = useState(false);
   const [newServer, setNewServer] = useState({
     name: "",
     url: "",
     apiKey: "",
   });
-  const [serverHealth, setServerHealth] = useState({});
 
-  // ✅ USE REF TO TRACK CURRENT SERVERS
-  const serversRef = useRef([]);
-
-  useEffect(() => {
-    loadServers();
-
-    // ✅ HEALTH CHECK INTERVAL THAT USES REF
-    const interval = setInterval(() => {
-      console.log('⏰ Health check interval triggered');
-      checkHealth(serversRef.current);  // Use ref instead of state
-    }, 30000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // ✅ UPDATE REF WHENEVER SERVERS CHANGE
-  useEffect(() => {
-    serversRef.current = servers;
-  }, [servers]);
-
-  const loadServers = async () => {
-    const storedServers = (await store.get("servers")) || [];
-    setServers(storedServers);
-    serversRef.current = storedServers;  // ✅ Update ref immediately
-
-    // Add servers to API client
-    storedServers.forEach((server) => {
-      apiClient.addServer(server.id, server.url, server.apiKey);
-    });
-
-    // Initial health check
-    checkHealth(storedServers);
-  };
-
-  const checkHealth = async (serversToCheck) => {
-    if (!serversToCheck || serversToCheck.length === 0) {
-      console.log('⚠️ No servers to check');
-      return;
-    }
-
-    const health = {};
-
-    console.log(`🔍 Checking health for ${serversToCheck.length} server(s)`);
-
-    for (const server of serversToCheck) {
-      console.log(`📡 Pinging ${server.name} at ${server.url}`);
-      try {
-        const data = await apiClient.getHealth(server.id);
-        console.log(`✅ ${server.name} is ONLINE`);
-        health[server.id] = { status: "online", ...data };
-      } catch (error) {
-        console.error(`❌ ${server.name} is OFFLINE:`, error.message);
-        health[server.id] = { status: "offline" };
-      }
-    }
-
-    console.log('📊 Health check complete:', health);
-    setServerHealth(health);
-  };
+  // Note: We removed the local useEffect for loading servers.
+  // The Context Provider handles loading servers on app startup.
 
   const addServer = async () => {
     const server = {
@@ -2994,28 +3995,35 @@ function ServerList() {
       createdAt: new Date().toISOString(),
     };
 
+    // 1. Save to Store
+    // We use the current 'servers' array from context to ensure we don't overwrite
     const updatedServers = [...servers, server];
     await store.set("servers", updatedServers);
-    setServers(updatedServers);
-    serversRef.current = updatedServers;  // ✅ Update ref
 
+    // 2. Register with API Client immediately
     apiClient.addServer(server.id, server.url, server.apiKey);
 
+    // 3. Sync Context State
+    // This updates the 'servers' state in Context and triggers a health check update
+    await refreshServers();
+
+    // 4. Reset UI
     setShowAddModal(false);
     setNewServer({ name: "", url: "", apiKey: "" });
-
-    // Check health immediately
-    checkHealth(updatedServers);
   };
 
   const deleteServer = async (serverId) => {
     if (!window.confirm("Are you sure you want to delete this server?")) return;
 
+    // 1. Update Store
     const updatedServers = servers.filter((s) => s.id !== serverId);
     await store.set("servers", updatedServers);
-    setServers(updatedServers);
-    serversRef.current = updatedServers;  // ✅ Update ref
+
+    // 2. Remove from API Client
     apiClient.removeServer(serverId);
+
+    // 3. Sync Context State
+    await refreshServers();
   };
 
   return (
@@ -3033,7 +4041,8 @@ function ServerList() {
 
       <div className="grid gap-4">
         {servers.map((server) => {
-          const health = serverHealth[server.id];
+          // Access health data from context
+          const health = healthData[server.id];
           const isOnline = health?.status === "online";
 
           return (
@@ -3180,6 +4189,147 @@ function ServerList() {
 
 export default ServerList;
 
+client/src/components/ScriptLibrary.jsx
+
+import React, { useState, useEffect } from "react";
+import { Plus, Code, Trash2 } from "lucide-react";
+import store from "../store/db";
+
+function ScriptLibrary() {
+  const [scripts, setScripts] = useState([]);
+  const [showModal, setShowModal] = useState(false);
+  const [currentScript, setCurrentScript] = useState({
+    name: "",
+    code: "",
+    requirements: [],
+  });
+
+  useEffect(() => {
+    loadScripts();
+  }, []);
+
+  const loadScripts = async () => {
+    const s = await store.get("scripts");
+    setScripts(s || []);
+  };
+
+  const saveScript = async () => {
+    const newScript = {
+      id: `script_${Date.now()}`,
+      name: currentScript.name,
+      code: currentScript.code,
+      requirements: currentScript.requirements
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+      createdAt: new Date().toISOString(),
+    };
+
+    const updated = [...scripts, newScript];
+    await store.set("scripts", updated);
+    setScripts(updated);
+    setShowModal(false);
+  };
+
+  const deleteScript = async (id) => {
+    const updated = scripts.filter((s) => s.id !== id);
+    await store.set("scripts", updated);
+    setScripts(updated);
+  };
+
+  return (
+    <div className="animate-fade-in">
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold text-white">Script Library</h2>
+        <button onClick={() => setShowModal(true)} className="btn btn-primary">
+          <Plus className="w-4 h-4 mr-2" /> New Script
+        </button>
+      </div>
+
+      <div className="grid gap-4">
+        {scripts.map((script) => (
+          <div key={script.id} className="card">
+            <div className="flex justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-white">
+                  {script.name}
+                </h3>
+                <p className="text-xs text-dark-400 mt-1">
+                  Requirements: {script.requirements.join(", ") || "None"}
+                </p>
+              </div>
+              <button
+                onClick={() => deleteScript(script.id)}
+                className="btn btn-error btn-sm"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+            <pre className="mt-2 p-2 bg-dark-900 rounded text-xs text-dark-300 overflow-x-auto">
+              {script.code.substring(0, 100)}...
+            </pre>
+          </div>
+        ))}
+      </div>
+
+      {/* Modal for adding script */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-dark-800 rounded-lg p-6 w-full max-w-2xl">
+            <h3 className="text-xl font-bold mb-4 text-white">
+              New Script Module
+            </h3>
+
+            <div className="space-y-4">
+              <input
+                type="text"
+                placeholder="Script Name (e.g. Instagram Login)"
+                className="input w-full"
+                onChange={(e) =>
+                  setCurrentScript({ ...currentScript, name: e.target.value })
+                }
+              />
+
+              <input
+                type="text"
+                placeholder="Requirements (comma separated: pyautogui, bs4)"
+                className="input w-full"
+                onChange={(e) =>
+                  setCurrentScript({
+                    ...currentScript,
+                    requirements: e.target.value,
+                  })
+                }
+              />
+
+              <textarea
+                className="input w-full font-mono text-sm h-64"
+                placeholder="async def main(context):..."
+                onChange={(e) =>
+                  setCurrentScript({ ...currentScript, code: e.target.value })
+                }
+              />
+            </div>
+
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => setShowModal(false)}
+                className="btn btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button onClick={saveScript} className="btn btn-primary flex-1">
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+export default ScriptLibrary;
+
 client/src/components/ProxyManager.jsx
 
 import React, { useState, useEffect } from "react";
@@ -3277,21 +4427,24 @@ function ProxyManager() {
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-6">
+      {/* Header Section - Fixed Layout */}
+      <div className="flex justify-between items-center mb-6 gap-4">
         <h2 className="text-2xl font-bold text-white">Proxies</h2>
+
         <div className="flex items-center space-x-3">
           <select
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="input"
+            className="input w-auto" // Changed from default to w-auto to prevent over-expanding
           >
             <option value="all">All Proxies</option>
             <option value="active">Active Only</option>
             <option value="blacklisted">Blacklisted Only</option>
           </select>
+
           <button
             onClick={() => setShowAddModal(true)}
-            className="btn btn-primary flex items-center"
+            className="btn btn-primary flex items-center whitespace-nowrap" // Added whitespace-nowrap to keep text on one line
           >
             <Plus className="w-4 h-4 mr-2" />
             Add Proxy
@@ -3493,70 +4646,187 @@ export default ProxyManager;
 client/src/components/ProfileManager.jsx
 
 import React, { useState, useEffect } from "react";
-import { Plus, Layout, Play, Pause, Square, Trash2 } from "lucide-react";
+import {
+  Plus,
+  Layout,
+  Play,
+  Pause,
+  Square,
+  Trash2,
+  Code,
+  Circle,
+} from "lucide-react";
 import store from "../store/db";
 import { apiClient } from "../api/client";
+import { useServerHealth } from "../context/ServerHealthContext";
 
 function ProfileManager() {
+  // Use Context for Servers and Health Data
+  const { servers, healthData } = useServerHealth();
+
   const [profiles, setProfiles] = useState([]);
-  const [servers, setServers] = useState([]);
   const [proxies, setProxies] = useState([]);
   const [accounts, setAccounts] = useState([]);
+  const [scripts, setScripts] = useState([]); // Script Library
+
   const [showAddModal, setShowAddModal] = useState(false);
+  const [profileMode, setProfileMode] = useState("automated"); // 'manual', 'automated', 'command_center'
+  const [selectedScriptIds, setSelectedScriptIds] = useState([]);
+
   const [newProfile, setNewProfile] = useState({
     name: "",
     serverId: "",
-    proxyId: "",
+    proxyId: "", // Empty string means "Select..." initially
     accountIds: [],
     userAgent: "",
     timezone: "America/New_York",
     locale: "en-US",
-    scriptCode: "",
-    restartScriptCode: "",
     memoryThresholdMb: 400,
   });
 
+  // Load data initially AND when servers context updates (to allow syncing)
   useEffect(() => {
     loadData();
-  }, []);
+  }, [servers]);
 
   const loadData = async () => {
-    setProfiles((await store.get("profiles")) || []);
-    setServers((await store.get("servers")) || []);
+    // 1. Load Local Data
+    const localProfiles = (await store.get("profiles")) || [];
     setProxies((await store.get("proxies")) || []);
     setAccounts((await store.get("accounts")) || []);
+    setScripts((await store.get("scripts")) || []);
+
+    // 2. Sync with Server (Crash Recovery / State Reconciliation)
+    // If the server restarted, profiles might be 'stopped' on server but 'running' locally.
+    // We merge server truth into local state.
+
+    // Create a mutable copy to update
+    let syncedProfiles = [...localProfiles];
+    let needsDbUpdate = false;
+
+    if (servers && servers.length > 0) {
+      for (const server of servers) {
+        try {
+          // Fetch profiles known by this server
+          const serverProfiles = await apiClient.listProfiles(server.id);
+          const serverMap = new Map(serverProfiles.map((p) => [p.id, p]));
+
+          // Update local profiles that belong to this server
+          syncedProfiles = syncedProfiles.map((p) => {
+            if (p.serverId === server.id) {
+              const serverVersion = serverMap.get(p.id);
+              // If server knows about it, take its status
+              if (serverVersion) {
+                if (p.status !== serverVersion.status) {
+                  needsDbUpdate = true;
+                  return { ...p, status: serverVersion.status };
+                }
+              } else {
+                // If server DOES NOT know about it (DB reset), mark as stopped or log warning.
+                // For now, we mark stopped so user can delete or restart.
+                if (p.status !== "stopped" && p.status !== "idle") {
+                  needsDbUpdate = true;
+                  return { ...p, status: "stopped" };
+                }
+              }
+            }
+            return p;
+          });
+        } catch (error) {
+          console.warn(
+            `Failed to sync profiles for server ${server.name}:`,
+            error,
+          );
+        }
+      }
+    }
+
+    setProfiles(syncedProfiles);
+    if (needsDbUpdate) {
+      await store.set("profiles", syncedProfiles);
+    }
   };
 
   const createProfile = async () => {
     try {
       const server = servers.find((s) => s.id === newProfile.serverId);
-      const proxy = proxies.find((p) => p.id === newProfile.proxyId);
 
-      if (!server || !proxy) {
-        alert("Please select valid server and proxy");
+      // Basic Server Validation
+      if (!server) {
+        alert("Please select a valid server.");
         return;
       }
 
-      // Create profile on server
+      // --- COMMAND CENTER VALIDATION ---
+      if (profileMode === "command_center") {
+        const existingCC = profiles.find((p) => p.mode === "command_center");
+        if (existingCC) {
+          alert(
+            "A Command Center profile already exists. Only one is allowed per farm.",
+          );
+          return;
+        }
+      }
+
+      // --- PROXY VALIDATION (Optional Logic) ---
+      // If proxyId is "none" or empty, we treat it as null (No Proxy)
+      const isNoProxy =
+        newProfile.proxyId === "none" || newProfile.proxyId === "";
+      const proxy = isNoProxy
+        ? null
+        : proxies.find((p) => p.id === newProfile.proxyId);
+
+      // If user selected something that isn't "none" but we couldn't find it, error
+      if (!isNoProxy && !proxy) {
+        alert("Invalid proxy selected.");
+        return;
+      }
+
+      // Script Validation (Only for Automated/CC modes)
+      if (profileMode !== "manual" && selectedScriptIds.length === 0) {
+        alert(
+          "Please select at least one script for Automated/Command Center modes.",
+        );
+        return;
+      }
+
+      // 1. Prepare Scripts and Requirements
+      const selectedScripts = scripts.filter((s) =>
+        selectedScriptIds.includes(s.id),
+      );
+      const scriptCodes = selectedScripts.map((s) => s.code);
+
+      // Aggregate unique requirements
+      const requirements = [
+        ...new Set(selectedScripts.flatMap((s) => s.requirements || [])),
+      ];
+
+      // 2. Create profile on server
       const result = await apiClient.createProfile(server.id, {
         name: newProfile.name,
-        proxy_id: proxy.id,
+        mode: profileMode,
+        proxy_id: proxy ? proxy.id : null, // Send null if No Proxy
         user_agent: newProfile.userAgent || undefined,
         timezone: newProfile.timezone,
         locale: newProfile.locale,
-        script_code: newProfile.scriptCode,
-        restart_script_code: newProfile.restartScriptCode || undefined,
+        scripts: scriptCodes, // Send array of code
+        requirements: requirements, // Send aggregated requirements
         memory_threshold_mb: newProfile.memoryThresholdMb,
       });
 
-      // Register proxy with server
-      await apiClient.registerProxy(server.id, proxy);
+      // 3. Register proxy with server (Only if a proxy is selected)
+      if (proxy) {
+        await apiClient.registerProxy(server.id, proxy);
+      }
 
-      // Save locally
+      // 4. Save locally
       const profile = {
         id: result.id,
         localId: `profile_${Date.now()}`,
         ...newProfile,
+        mode: profileMode,
+        proxyId: proxy ? proxy.id : null, // Store null locally for clarity
+        scriptIds: selectedScriptIds, // Store IDs for reference
         status: "idle",
         createdAt: new Date().toISOString(),
       };
@@ -3584,14 +4854,30 @@ function ProfileManager() {
       userAgent: "",
       timezone: "America/New_York",
       locale: "en-US",
-      scriptCode: "",
-      restartScriptCode: "",
       memoryThresholdMb: 400,
     });
+    setSelectedScriptIds([]);
+    setProfileMode("automated");
   };
 
   const startProfile = async (profile) => {
     try {
+      // Check if trying to start a second Command Center
+      if (profile.mode === "command_center") {
+        const runningCC = profiles.find(
+          (p) =>
+            p.mode === "command_center" &&
+            p.status === "running" &&
+            p.id !== profile.id,
+        );
+        if (runningCC) {
+          alert(
+            `Cannot start: Command Center "${runningCC.name}" is already running. Only one active CC allowed.`,
+          );
+          return;
+        }
+      }
+
       // Get accounts for this profile
       const profileAccounts = {};
       profile.accountIds.forEach((accountId) => {
@@ -3659,15 +4945,21 @@ function ProfileManager() {
       return;
 
     try {
+      // Attempt to delete from server
       await apiClient.deleteProfile(profile.serverId, profile.id);
-
-      const updatedProfiles = profiles.filter((p) => p.id !== profile.id);
-      await store.set("profiles", updatedProfiles);
-      setProfiles(updatedProfiles);
     } catch (error) {
-      console.error("Failed to delete profile:", error);
-      alert("Failed to delete profile: " + error.message);
+      console.warn(
+        "Server delete failed (ghost profile or server missing):",
+        error,
+      );
+      // We proceed to delete locally anyway. This allows cleanup of "ghost" profiles
+      // if the server was reset or the server ID is invalid.
     }
+
+    // Always remove from local store
+    const updatedProfiles = profiles.filter((p) => p.id !== profile.id);
+    await store.set("profiles", updatedProfiles);
+    setProfiles(updatedProfiles);
   };
 
   const getServerName = (serverId) => {
@@ -3676,9 +4968,20 @@ function ProfileManager() {
   };
 
   const getProxyName = (proxyId) => {
+    if (!proxyId) return "No Proxy (Direct)";
     const proxy = proxies.find((p) => p.id === proxyId);
     return proxy ? `${proxy.host}:${proxy.port}` : "Unknown";
   };
+
+  const getScriptNames = (scriptIds) => {
+    if (!scriptIds || scriptIds.length === 0) return "None";
+    return scriptIds
+      .map((id) => scripts.find((s) => s.id === id)?.name || id)
+      .join(", ");
+  };
+
+  // Check if a Command Center already exists to disable option
+  const commandCenterExists = profiles.some((p) => p.mode === "command_center");
 
   return (
     <div>
@@ -3698,13 +5001,32 @@ function ProfileManager() {
           <div key={profile.id} className="card">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center space-x-4">
-                <div className="w-12 h-12 rounded-lg bg-primary-500/20 flex items-center justify-center">
-                  <Layout className="w-6 h-6 text-primary-500" />
+                <div
+                  className={`w-12 h-12 rounded-lg flex items-center justify-center ${
+                    profile.mode === "command_center"
+                      ? "bg-warning-500/20"
+                      : profile.mode === "manual"
+                        ? "bg-dark-700"
+                        : "bg-primary-500/20"
+                  }`}
+                >
+                  <Layout
+                    className={`w-6 h-6 ${
+                      profile.mode === "command_center"
+                        ? "text-warning-500"
+                        : profile.mode === "manual"
+                          ? "text-dark-400"
+                          : "text-primary-500"
+                    }`}
+                  />
                 </div>
 
                 <div>
                   <h3 className="text-lg font-semibold text-white">
                     {profile.name}
+                    <span className="ml-2 text-xs font-normal text-dark-500 uppercase">
+                      ({profile.mode || "automated"})
+                    </span>
                   </h3>
                   <p className="text-sm text-dark-400">
                     {getServerName(profile.serverId)} •{" "}
@@ -3776,8 +5098,13 @@ function ProfileManager() {
                 <p className="text-white">{profile.accountIds?.length || 0}</p>
               </div>
               <div>
-                <p className="text-dark-400">Timezone</p>
-                <p className="text-white">{profile.timezone}</p>
+                <p className="text-dark-400">Scripts</p>
+                <p
+                  className="text-white truncate"
+                  title={getScriptNames(profile.scriptIds)}
+                >
+                  {getScriptNames(profile.scriptIds)}
+                </p>
               </div>
             </div>
           </div>
@@ -3791,6 +5118,7 @@ function ProfileManager() {
             <h3 className="text-xl font-bold text-white mb-4">New Profile</h3>
 
             <div className="space-y-4">
+              {/* Profile Name */}
               <div>
                 <label className="block text-sm text-dark-300 mb-2">
                   Profile Name
@@ -3806,50 +5134,166 @@ function ProfileManager() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm text-dark-300 mb-2">
-                    Server
-                  </label>
-                  <select
-                    className="input w-full"
-                    value={newProfile.serverId}
-                    onChange={(e) =>
-                      setNewProfile({ ...newProfile, serverId: e.target.value })
-                    }
-                  >
-                    <option value="">Select server</option>
-                    {servers.map((server) => (
-                      <option key={server.id} value={server.id}>
-                        {server.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              {/* Mode Selector */}
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Profile Mode
+                </label>
+                <select
+                  className="input w-full"
+                  value={profileMode}
+                  onChange={(e) => setProfileMode(e.target.value)}
+                >
+                  <option value="manual">Manual (Browser Only)</option>
+                  <option value="automated">Automated (Script Chain)</option>
+                  <option value="command_center" disabled={commandCenterExists}>
+                    Command Center (Orchestrator){" "}
+                    {commandCenterExists ? "- [Already Exists]" : ""}
+                  </option>
+                </select>
+                {commandCenterExists && (
+                  <p className="text-xs text-warning-500 mt-1">
+                    A Command Center profile already exists. Delete it to create
+                    a new one.
+                  </p>
+                )}
+              </div>
 
-                <div>
-                  <label className="block text-sm text-dark-300 mb-2">
-                    Proxy
-                  </label>
-                  <select
-                    className="input w-full"
-                    value={newProfile.proxyId}
-                    onChange={(e) =>
-                      setNewProfile({ ...newProfile, proxyId: e.target.value })
-                    }
-                  >
-                    <option value="">Select proxy</option>
-                    {proxies
-                      .filter((p) => !p.blacklisted)
-                      .map((proxy) => (
-                        <option key={proxy.id} value={proxy.id}>
-                          {proxy.host}:{proxy.port} ({proxy.country})
-                        </option>
-                      ))}
-                  </select>
+              {/* Server Selection (Updated UI with Status) */}
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Server
+                </label>
+                <div className="space-y-2 bg-dark-900 p-3 rounded-lg max-h-48 overflow-y-auto">
+                  {servers.length === 0 && (
+                    <p className="text-dark-500 text-sm text-center py-2">
+                      No servers added.
+                    </p>
+                  )}
+                  {servers.map((server) => {
+                    const isOnline = healthData[server.id]?.status === "online";
+                    return (
+                      <label
+                        key={server.id}
+                        className="flex items-center justify-between p-2 bg-dark-800 rounded cursor-pointer hover:bg-dark-700"
+                      >
+                        <div className="flex items-center space-x-3">
+                          <input
+                            type="radio"
+                            name="server"
+                            value={server.id}
+                            checked={newProfile.serverId === server.id}
+                            onChange={() =>
+                              setNewProfile({
+                                ...newProfile,
+                                serverId: server.id,
+                              })
+                            }
+                            className="form-radio"
+                          />
+                          <span className="text-white">{server.name}</span>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Circle
+                            className={`w-3 h-3 ${
+                              isOnline
+                                ? "fill-success-500 text-success-500"
+                                : "fill-error-500 text-error-500"
+                            }`}
+                          />
+                          <span
+                            className={`text-xs ${
+                              isOnline ? "text-success-500" : "text-error-500"
+                            }`}
+                          >
+                            {isOnline ? "Online" : "Offline"}
+                          </span>
+                        </div>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
 
+              {/* Proxy Selection */}
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Proxy
+                </label>
+                <select
+                  className="input w-full"
+                  value={newProfile.proxyId}
+                  onChange={(e) =>
+                    setNewProfile({ ...newProfile, proxyId: e.target.value })
+                  }
+                >
+                  <option value="">Select proxy option</option>
+                  <option value="none">No Proxy (Direct Connection)</option>
+                  {/* Only show non-blacklisted proxies */}
+                  {proxies
+                    .filter((p) => !p.blacklisted)
+                    .map((proxy) => (
+                      <option key={proxy.id} value={proxy.id}>
+                        {proxy.host}:{proxy.port} ({proxy.country})
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {/* Script Selection (Conditional) */}
+              {profileMode !== "manual" && (
+                <div>
+                  <label className="block text-sm text-dark-300 mb-2">
+                    Select Scripts (In Order)
+                  </label>
+                  {scripts.length === 0 ? (
+                    <div className="text-sm text-warning-500 bg-dark-900 p-3 rounded-lg">
+                      No scripts found in library. Create scripts in the "Script
+                      Library" tab first.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 bg-dark-900 p-3 rounded-lg max-h-48 overflow-y-auto">
+                      {scripts.map((script) => (
+                        <label
+                          key={script.id}
+                          className="flex items-center space-x-3 cursor-pointer p-2 hover:bg-dark-800 rounded"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedScriptIds.includes(script.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedScriptIds([
+                                  ...selectedScriptIds,
+                                  script.id,
+                                ]);
+                              } else {
+                                setSelectedScriptIds(
+                                  selectedScriptIds.filter(
+                                    (id) => id !== script.id,
+                                  ),
+                                );
+                              }
+                            }}
+                            className="rounded"
+                          />
+                          <Code className="w-4 h-4 text-primary-400" />
+                          <div className="flex-1">
+                            <span className="text-white">{script.name}</span>
+                            {script.requirements?.length > 0 && (
+                              <span className="text-xs text-dark-500 ml-2">
+                                (Deps: {script.requirements.join(", ")})
+                              </span>
+                            )}
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Config Grid */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm text-dark-300 mb-2">
@@ -3865,7 +5309,6 @@ function ProfileManager() {
                     }
                   />
                 </div>
-
                 <div>
                   <label className="block text-sm text-dark-300 mb-2">
                     Locale
@@ -3909,39 +5352,6 @@ function ProfileManager() {
                     setNewProfile({
                       ...newProfile,
                       memoryThresholdMb: parseInt(e.target.value),
-                    })
-                  }
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-dark-300 mb-2">
-                  Script Code
-                </label>
-                <textarea
-                  className="input w-full font-mono text-sm"
-                  rows="10"
-                  placeholder="# Python script here"
-                  value={newProfile.scriptCode}
-                  onChange={(e) =>
-                    setNewProfile({ ...newProfile, scriptCode: e.target.value })
-                  }
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-dark-300 mb-2">
-                  Restart Script (optional)
-                </label>
-                <textarea
-                  className="input w-full font-mono text-sm"
-                  rows="5"
-                  placeholder="# Restart script here"
-                  value={newProfile.restartScriptCode}
-                  onChange={(e) =>
-                    setNewProfile({
-                      ...newProfile,
-                      restartScriptCode: e.target.value,
                     })
                   }
                 />
@@ -4007,8 +5417,7 @@ function ProfileManager() {
                 disabled={
                   !newProfile.name ||
                   !newProfile.serverId ||
-                  !newProfile.proxyId ||
-                  !newProfile.scriptCode
+                  (profileMode !== "manual" && selectedScriptIds.length === 0)
                 }
               >
                 Create Profile
@@ -4538,6 +5947,7 @@ class BrowserFarmClient {
       headers: {
         "X-API-Key": apiKey,
       },
+      timeout: 300000, // 5 min timeout to accommodate Xvfb/Browser startup
     });
     this.servers.set(id, { url, apiKey, client });
   }
@@ -4552,21 +5962,80 @@ class BrowserFarmClient {
     return server.client;
   }
 
-  // Health
+  // -----------------------------------------------------------
+  // Health & Global Status
+  // -----------------------------------------------------------
+
+  /**
+   * Get health status of a single server.
+   * Returns health data or throws error if unreachable.
+   */
   async getHealth(serverId) {
     const client = this.getClient(serverId);
     const { data } = await client.get("/health");
     return data;
   }
 
+  /**
+   * Checks health of ALL registered servers.
+   * Used by the Global Context for polling.
+   * Returns a map: { serverId: { status: 'online'|'offline', ...data } }
+   */
+  async checkAllServersHealth() {
+    const results = {};
+    const promises = [];
+
+    for (const [serverId, server] of this.servers.entries()) {
+      promises.push(
+        this.getHealth(serverId)
+          .then((data) => {
+            results[serverId] = { status: "online", ...data };
+          })
+          .catch((error) => {
+            results[serverId] = {
+              status: "offline",
+              error: error.message || "Connection failed",
+            };
+          }),
+      );
+    }
+
+    await Promise.all(promises);
+    return results;
+  }
+
+  // -----------------------------------------------------------
+  // Command Center
+  // -----------------------------------------------------------
+
+  async getCommandCenter(serverId) {
+    const client = this.getClient(serverId);
+    try {
+      const { data } = await client.get("/command-center");
+      return data;
+    } catch (error) {
+      // If 404, no command center is running
+      if (error.response && error.response.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  // -----------------------------------------------------------
   // Proxies
+  // -----------------------------------------------------------
+
   async registerProxy(serverId, proxy) {
     const client = this.getClient(serverId);
     const { data } = await client.post("/proxies", proxy);
     return data;
   }
 
+  // -----------------------------------------------------------
   // Profiles
+  // -----------------------------------------------------------
+
   async listProfiles(serverId) {
     const client = this.getClient(serverId);
     const { data } = await client.get("/profiles");
@@ -4612,7 +6081,10 @@ class BrowserFarmClient {
     return data;
   }
 
+  // -----------------------------------------------------------
   // Screenshots
+  // -----------------------------------------------------------
+
   async getScreenshot(serverId, profileId) {
     const client = this.getClient(serverId);
     const response = await client.get(`/profiles/${profileId}/screen`, {
@@ -4633,22 +6105,52 @@ class BrowserFarmClient {
     return data;
   }
 
+  // -----------------------------------------------------------
   // Metrics
+  // -----------------------------------------------------------
+
   async getMetrics(serverId, profileId) {
     const client = this.getClient(serverId);
     const { data } = await client.get(`/profiles/${profileId}/metrics`);
     return data;
   }
 
+  // -----------------------------------------------------------
+  // Shared State
+  // -----------------------------------------------------------
+
+  async getState(serverId, key) {
+    const client = this.getClient(serverId);
+    const { data } = await client.get(`/state/${key}`);
+    return data;
+  }
+
+  async setState(serverId, key, value) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post(`/state/${key}`, value);
+    return data;
+  }
+
+  async deleteState(serverId, key) {
+    const client = this.getClient(serverId);
+    const { data } = await client.delete(`/state/${key}`);
+    return data;
+  }
+
+  // -----------------------------------------------------------
   // WebSocket URLs
+  // -----------------------------------------------------------
+
   getStreamUrl(serverId, profileId) {
     const server = this.servers.get(serverId);
+    if (!server) return null;
     const wsUrl = server.url.replace("http", "ws");
     return `${wsUrl}/profiles/${profileId}/stream`;
   }
 
   getControlUrl(serverId, profileId) {
     const server = this.servers.get(serverId);
+    if (!server) return null;
     const wsUrl = server.url.replace("http", "ws");
     return `${wsUrl}/profiles/${profileId}/control`;
   }
@@ -4656,31 +6158,3 @@ class BrowserFarmClient {
 
 export const apiClient = new BrowserFarmClient();
 export default apiClient;
-
-client/public/index.html
-
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8" />
-        <link rel="icon" href="%PUBLIC_URL%/icon.png" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="theme-color" content="#0f172a" />
-        <meta
-            name="description"
-            content="Browser Farm - Distributed Browser Automation"
-        />
-        <link rel="apple-touch-icon" href="%PUBLIC_URL%/icon.png" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        <link
-            href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
-            rel="stylesheet"
-        />
-        <title>Browser Farm</title>
-    </head>
-    <body>
-        <noscript>You need to enable JavaScript to run this app.</noscript>
-        <div id="root"></div>
-    </body>
-</html>

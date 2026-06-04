@@ -36,7 +36,8 @@ class BrowserFarmClient {
    */
   async getHealth(serverId) {
     const client = this.getClient(serverId);
-    const { data } = await client.get("/health");
+    // Use a short timeout for health checks to prevent UI freezing
+    const { data } = await client.get("/health", { timeout: 5000 });
     return data;
   }
 
@@ -198,6 +199,22 @@ class BrowserFarmClient {
   async deleteState(serverId, key) {
     const client = this.getClient(serverId);
     const { data } = await client.delete(`/state/${key}`);
+    return data;
+  }
+
+  // -----------------------------------------------------------
+  // Accounts & Proxy History
+  // -----------------------------------------------------------
+
+  async syncAccounts(serverId, accounts) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post("/accounts/sync", { accounts });
+    return data;
+  }
+
+  async getProxyHistory(serverId, accountId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.get(`/accounts/${accountId}/proxy-history`);
     return data;
   }
 
