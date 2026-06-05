@@ -14,7 +14,7 @@ class MemoryMonitor:
         context: BrowserContext,
         threshold_mb: int,
         on_threshold_exceeded: Callable,
-        browser_pid: Optional[int] = None  # New: Accept the Browser PID for accurate tracking
+        browser_pid: Optional[int] = None
     ):
         self.profile_id = profile_id
         self.context = context
@@ -52,7 +52,7 @@ class MemoryMonitor:
                 memory_mb = await self._get_memory_usage()
                 self.current_memory_mb = memory_mb
 
-                # Get CPU usage
+                # Get CPU usage (Non-blocking)
                 cpu = await self._get_cpu_usage()
                 self.cpu_percent = cpu
 
@@ -136,19 +136,23 @@ class MemoryMonitor:
     async def _get_cpu_usage(self) -> float:
         """
         Get accurate CPU usage percentage of the browser process tree.
+        NON-BLOCKING: Uses interval=None (snapshot mode).
         """
         try:
             if self.browser_pid:
                 try:
                     parent = psutil.Process(self.browser_pid)
-                    # Get CPU for parent
-                    cpu_total = parent.cpu_percent(interval=0.1)
+
+                    # FIX: Use interval=None (Non-blocking).
+                    # Returns 0.0 on first call, then average usage since last call.
+                    cpu_total = parent.cpu_percent(interval=None)
 
                     # Sum CPU of all children
                     children = parent.children(recursive=True)
                     for child in children:
                         try:
-                            cpu_total += child.cpu_percent(interval=0.1)
+                            # Also non-blocking for children
+                            cpu_total += child.cpu_percent(interval=None)
                         except (psutil.NoSuchProcess, psutil.AccessDenied):
                             continue
 
@@ -157,8 +161,8 @@ class MemoryMonitor:
                 except psutil.NoSuchProcess:
                     return 0.0
 
-            # Fallback: System-wide CPU (Not ideal for profile-specific)
-            return psutil.cpu_percent(interval=0.1)
+            # Fallback: System-wide CPU (Non-blocking)
+            return psutil.cpu_percent(interval=None)
 
         except Exception as e:
             logger.error(f"Error getting CPU usage: {e}")

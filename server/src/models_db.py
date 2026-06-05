@@ -10,6 +10,7 @@ import enum
 
 class ProfileStatusDB(str, enum.Enum):
     IDLE = "idle"
+    INITIALIZING = "initializing" # NEW: Added for background startup
     RUNNING = "running"
     PAUSED = "paused"
     STOPPED = "stopped"
@@ -25,7 +26,7 @@ class ProfileModeDB(str, enum.Enum):
 # Models
 # -----------------------------------------------
 
-class DbProfile(Base):  # FIXED: Renamed from ProfileModel to DbProfile to match server.py import
+class DbProfile(Base):
     """
     SQL Table for Profiles.
     Replaces the in-memory 'profiles' dictionary.
@@ -64,7 +65,7 @@ class DbProfile(Base):  # FIXED: Renamed from ProfileModel to DbProfile to match
         return f"<Profile(id={self.id}, name={self.name}, status={self.status})>"
 
 
-class ProxyModel(Base):
+class DbProxy(Base):
     """
     SQL Table for Proxies.
     Allows persistence of proxy configurations linked to profiles.

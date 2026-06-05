@@ -31,6 +31,7 @@ class ContextManager:
         self.proxies: Dict[str, ProxyConfig] = {}
 
         # Xvfb Manager handles virtual displays for isolation
+        # Initialized here, lifecycle managed by Server startup/shutdown
         self.xvfb_manager = XvfbManager()
 
         # Ensure data directories exist
@@ -73,8 +74,8 @@ class ContextManager:
         Create a fully isolated browser profile environment.
 
         Workflow:
-        1. Allocate a dedicated Xvfb display.
-        2. Launch a dedicated Chromium process bound to that display.
+        1. Allocate a dedicated Xvfb display (Async).
+        2. Launch a dedicated Chromium process bound to that display (with Timeout).
         3. Create a Browser Context with Proxy (Optional) & Geolocation settings.
         4. Inject Stealth Scripts to mask automation signatures.
         5. Initialize Script Runner and Resource Monitors.
@@ -82,9 +83,10 @@ class ContextManager:
         if profile.id in self.contexts:
             raise ValueError(f"Profile {profile.id} already exists")
 
-        # --- 1. Resource Allocation: Xvfb Display ---
+        # --- 1. Resource Allocation: Async Xvfb Display ---
         try:
-            display_str = self.xvfb_manager.start_display(profile.id)
+            # FIX: Await the async Xvfb manager
+            display_str = await self.xvfb_manager.start_display(profile.id)
             logger.info(f"[{profile.id}] Allocated Display: {display_str}")
         except Exception as e:
             logger.error(f"[{profile.id}] Failed to start Xvfb display: {e}")
@@ -114,33 +116,42 @@ class ContextManager:
                 # No proxy selected (None)
                 logger.info(f"[{profile.id}] No proxy selected. Running direct connection.")
 
-            # Launch Browser Instance
-            # Note: We launch one browser per profile to ensure thread-safe PyAutoGUI usage on specific displays.
-            browser = await self.playwright.chromium.launch(
-                headless=False,  # Must be headful for Xvfb/PyAutoGUI rendering
-                proxy=proxy_config, # Playwright handles None correctly (Direct connection)
-                args=[
-                    "--disable-blink-features=AutomationControlled",  # Mask Chrome automation flags
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",  # Often helpful in Xvfb
-                    "--disable-infobars",
-                    "--start-maximized",
-                ],
-                env={"DISPLAY": display_str} # Critical: Bind browser to specific display
-            )
+            # Launch Browser Instance with Timeout
+            # FIX: Wrapped in wait_for to prevent indefinite hangs
+            try:
+                browser = await asyncio.wait_for(
+                    self.playwright.chromium.launch(
+                        headless=False,  # Must be headful for Xvfb/PyAutoGUI rendering
+                        proxy=proxy_config, # Playwright handles None correctly (Direct connection)
+                        args=[
+                            "--disable-blink-features=AutomationControlled",  # Mask Chrome automation flags
+                            "--no-sandbox",
+                            "--disable-dev-shm-usage",
+                            "--disable-gpu",  # Often helpful in Xvfb
+                            "--disable-infobars",
+                            "--start-maximized",
+                        ],
+                        env={"DISPLAY": display_str} # Critical: Bind browser to specific display
+                    ),
+                    timeout=60.0 # 60 second hard timeout for launch
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"[{profile.id}] Browser launch timed out after 60s.")
+                raise RuntimeError("Browser launch timed out")
+
             self.browsers[profile.id] = browser
 
-            # --- CRITICAL: Extract PID for Memory Monitor ---
-            # The .process() method returns a Popen object wrapping the browser process
-            browser_process = browser.process()
-            if browser_process:
-                browser_pid = browser_process.pid
-                logger.info(f"[{profile.id}] Browser PID: {browser_pid}")
+            # --- CRITICAL FIX: PID Extraction ---
+            # Python Playwright 'Browser' object does NOT expose .process() like Node.js.
+            # We cannot get the PID directly for accurate monitoring.
+            # We pass None, and the MemoryMonitor will fallback to CDP metrics.
+            # browser_pid remains None (initialized above)
+            logger.info(f"[{profile.id}] Browser launched successfully (Python API does not expose PID).")
 
         except Exception as e:
             logger.error(f"[{profile.id}] Browser launch failed: {e}")
-            self.xvfb_manager.stop_display(profile.id) # Cleanup Display if browser fails
+            # FIX: Await cleanup of Xvfb
+            await self.xvfb_manager.stop_display(profile.id)
             raise RuntimeError(f"Browser launch failed: {e}")
 
         # --- 3. Context Creation & Stealth Injection ---
@@ -194,7 +205,8 @@ class ContextManager:
             logger.error(f"[{profile.id}] Context creation failed: {e}")
             if browser: await browser.close()
             del self.browsers[profile.id]
-            self.xvfb_manager.stop_display(profile.id)
+            # FIX: Await cleanup
+            await self.xvfb_manager.stop_display(profile.id)
             raise
 
         # --- 4. Logic Initialization: Runner & Monitor ---
@@ -220,7 +232,7 @@ class ContextManager:
             on_threshold_exceeded=lambda: asyncio.create_task(
                 self.restart_profile(profile.id, profile, accounts)
             ),
-            browser_pid=browser_pid # Pass the PID here
+            browser_pid=browser_pid # Pass the PID here (None in Python)
         )
         self.monitors[profile.id] = monitor
 
@@ -285,7 +297,8 @@ class ContextManager:
             del self.browsers[profile_id]
 
         # 5. Release Xvfb Display
-        self.xvfb_manager.stop_display(profile_id)
+        # FIX: Await the async stop_display method
+        await self.xvfb_manager.stop_display(profile_id)
 
         logger.info(f"⏹ Profile {profile_id} stopped and resources released")
 

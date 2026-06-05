@@ -218,6 +218,27 @@ class BrowserFarmClient {
     return data;
   }
 
+  /**
+   * NEW: Record that an account is using a specific proxy for a specific website.
+   * Used for enforcing "1 Account per Website per Proxy" compliance.
+   */
+  async recordProxyHistory(serverId, accountId, proxyId, website) {
+    const client = this.getClient(serverId);
+    // Sending as query params or body depending on server implementation.
+    // Server expects query params based on the endpoint defined:
+    // @app.post("/history/record")
+    // async def record_proxy_history(account_id: str, proxy_id: str, website: str, ...)
+    // Note: FastAPI with query params needs them passed in the URL or config.
+    const { data } = await client.post(`/history/record`, null, {
+      params: {
+        account_id: accountId,
+        proxy_id: proxyId,
+        website: website,
+      },
+    });
+    return data;
+  }
+
   // -----------------------------------------------------------
   // WebSocket URLs
   // -----------------------------------------------------------

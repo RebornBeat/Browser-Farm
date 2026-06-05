@@ -4,12 +4,13 @@ import argparse
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends, BackgroundTasks
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
+from sqlalchemy.sql import func
 
 # Local Imports
 from .models import (
@@ -23,7 +24,7 @@ from .utils import generate_api_key, get_memory_usage, get_cached_cpu_usage
 
 # Database Imports
 from .database import get_db, init_db, AsyncSessionLocal
-from .models_db import DbProfile
+from .models_db import DbProfile, DbProxyHistory
 
 # Set up logging
 logging.basicConfig(
@@ -41,6 +42,48 @@ xvfb: Optional[XvfbManager] = None
 accounts_cache: Dict[str, Dict[str, dict]] = {}
 shared_state_data: Dict[str, Any] = {}
 command_center_id: Optional[str] = None
+
+
+# ---------------------------------------------------------
+# BACKGROUND TASKS
+# ---------------------------------------------------------
+
+async def initialize_profile_task(profile_id: str, profile_pydantic: Profile, accounts: Dict[str, dict]):
+    """
+    Heavy initialization logic that runs in the background.
+    This prevents the HTTP request from timing out.
+    """
+    try:
+        # 1. Create the browser context (Heavy operation)
+        await context_manager.create_profile(profile_pydantic, accounts)
+
+        # 2. Start execution
+        await context_manager.start_profile(profile_id)
+
+        # 3. Update Database to RUNNING
+        async with AsyncSessionLocal() as db:
+            stmt = select(DbProfile).where(DbProfile.id == profile_id)
+            result = await db.execute(stmt)
+            p = result.scalar_one()
+            p.status = ProfileStatus.RUNNING
+            await db.commit()
+            logger.info(f"Profile {profile_id} background initialization successful.")
+
+    except Exception as e:
+        logger.error(f"Background initialization failed for {profile_id}: {e}")
+
+        # Update Database to CRASHED
+        async with AsyncSessionLocal() as db:
+            stmt = select(DbProfile).where(DbProfile.id == profile_id)
+            result = await db.execute(stmt)
+            p = result.scalar_one_or_none()
+            if p:
+                p.status = ProfileStatus.CRASHED
+                await db.commit()
+
+        # Cleanup resources if partially created
+        if profile_id in context_manager.browsers or profile_id in context_manager.xvfb_manager.active_displays:
+             await context_manager.stop_profile(profile_id)
 
 
 @asynccontextmanager
@@ -67,12 +110,12 @@ async def lifespan(app: FastAPI):
     # If server restarted, any 'running' profiles in DB are actually dead.
     # We must mark them as STOPPED.
     async with AsyncSessionLocal() as session:
-        stmt = select(DbProfile).where(DbProfile.status.in_([ProfileStatus.RUNNING, ProfileStatus.PAUSED]))
+        stmt = select(DbProfile).where(DbProfile.status.in_([ProfileStatus.RUNNING, ProfileStatus.PAUSED, ProfileStatus.INITIALIZING]))
         result = await session.execute(stmt)
         active_profiles = result.scalars().all()
 
         if active_profiles:
-            logger.warning(f"Found {len(active_profiles)} profiles in RUNNING/PAUSED state during startup. Marking as STOPPED.")
+            logger.warning(f"Found {len(active_profiles)} profiles in ACTIVE state during startup. Marking as STOPPED.")
             for p in active_profiles:
                 p.status = ProfileStatus.STOPPED
             await session.commit()
@@ -95,7 +138,8 @@ async def lifespan(app: FastAPI):
     if context_manager:
         await context_manager.stop()
     if xvfb:
-        xvfb.stop_all()
+        # Stop all managed displays on shutdown
+        await xvfb.stop_all()
 
 
 app = FastAPI(
@@ -278,10 +322,15 @@ async def get_profile(profile_id: str, _=verify_api_key, db: AsyncSession = Depe
 async def start_profile(
     profile_id: str,
     accounts: Dict[str, dict],
+    background_tasks: BackgroundTasks,
     _=verify_api_key,
     db: AsyncSession = Depends(get_db)
 ):
-    """Start a profile (Launch browser and run scripts)"""
+    """
+    Start a profile.
+    Returns immediately with status 'initializing'.
+    Actual startup happens in background to prevent timeouts.
+    """
     global command_center_id
 
     result = await db.execute(select(DbProfile).where(DbProfile.id == profile_id))
@@ -295,47 +344,34 @@ async def start_profile(
         if command_center_id and command_center_id != profile_id:
              raise HTTPException(400, "A Command Center is already running.")
 
-    # Update Status in DB
-    profile.status = ProfileStatus.RUNNING
+    # Update Status in DB immediately
+    profile.status = ProfileStatus.INITIALIZING
     await db.commit()
 
     accounts_cache[profile_id] = accounts
 
-    # Create context if not exists
-    if profile_id not in context_manager.contexts:
-        # --- FIX: Removed duplicate Xvfb logic. ContextManager handles resource allocation ---
+    # Convert DB profile to Pydantic for context manager
+    profile_data = {
+        "id": profile.id,
+        "name": profile.name,
+        "mode": profile.mode,
+        "proxy_id": profile.proxy_id,
+        "user_agent": profile.user_agent,
+        "timezone": profile.timezone,
+        "locale": profile.locale,
+        "geolocation": profile.geolocation,
+        "scripts": profile.scripts,
+        "requirements": profile.requirements,
+        "memory_threshold_mb": profile.memory_threshold_mb,
+        "status": profile.status,
+        "created_at": profile.created_at
+    }
+    profile_pydantic = Profile(**profile_data)
 
-        # Convert DB profile to Pydantic for context manager compatibility
-        # We construct manually here to be safe across versions
-        profile_data = {
-            "id": profile.id,
-            "name": profile.name,
-            "mode": profile.mode,
-            "proxy_id": profile.proxy_id,
-            "user_agent": profile.user_agent,
-            "timezone": profile.timezone,
-            "locale": profile.locale,
-            "geolocation": profile.geolocation,
-            "scripts": profile.scripts,
-            "requirements": profile.requirements,
-            "memory_threshold_mb": profile.memory_threshold_mb,
-            "status": profile.status,
-            "created_at": profile.created_at
-        }
-        profile_pydantic = Profile(**profile_data)
+    # Schedule the heavy startup logic in the background
+    background_tasks.add_task(initialize_profile_task, profile_id, profile_pydantic, accounts)
 
-        try:
-            # FIX: Removed 'display_str' argument. ContextManager handles Xvfb internally.
-            await context_manager.create_profile(profile_pydantic, accounts)
-        except Exception as e:
-            logger.error(f"Failed to create profile context for {profile_id}: {e}")
-            profile.status = ProfileStatus.CRASHED
-            await db.commit()
-            raise HTTPException(500, f"Failed to start profile: {str(e)}")
-
-    await context_manager.start_profile(profile_id)
-
-    return {"status": "started"}
+    return {"status": "initializing"}
 
 
 @app.post("/profiles/{profile_id}/pause")
@@ -404,6 +440,52 @@ async def delete_profile(profile_id: str, _=verify_api_key, db: AsyncSession = D
         command_center_id = None
 
     return {"status": "deleted"}
+
+
+# ---------------------------------------------------------
+# HISTORY & COMPLIANCE
+# ---------------------------------------------------------
+
+@app.post("/history/record")
+async def record_proxy_history(
+    account_id: str,
+    proxy_id: str,
+    website: str,
+    _=verify_api_key,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Record that an account used a specific proxy for a specific website.
+    Enforces '1 Account per Website per Proxy' logic.
+    """
+    # Check for conflicts
+    stmt = select(DbProxyHistory).where(
+        DbProxyHistory.account_id == account_id,
+        DbProxyHistory.website == website
+    )
+    result = await db.execute(stmt)
+    existing = result.scalar_one_or_none()
+
+    if existing:
+        if existing.proxy_id != proxy_id:
+            # Conflict: Account used this website with a DIFFERENT proxy
+            raise HTTPException(
+                status_code=400,
+                detail=f"Conflict: Account {account_id} already used {website} with proxy {existing.proxy_id}"
+            )
+        # Update timestamp
+        existing.last_used = func.now()
+    else:
+        # Create new record
+        new_entry = DbProxyHistory(
+            account_id=account_id,
+            proxy_id=proxy_id,
+            website=website
+        )
+        db.add(new_entry)
+
+    await db.commit()
+    return {"status": "recorded"}
 
 
 # ---------------------------------------------------------

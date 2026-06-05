@@ -1,5 +1,3 @@
-README.md
-
 # Browser Farm
 
 A distributed browser automation platform for developers. Manage multiple browser contexts across multiple servers with live monitoring, manual control, and custom scripts.
@@ -7,9 +5,10 @@ A distributed browser automation platform for developers. Manage multiple browse
 ## Features
 
 - 🖥️ **Multi-Server Management** - Connect and manage multiple automation servers
-- 🗄️ **Persistent Storage** - PostgreSQL database backing for profiles, ensuring state survives restarts
+- 🗄️ **Persistent Storage** - PostgreSQL database backing for profiles, accounts, and proxies, ensuring state survives restarts
 - 🌐 **Proxy Management** - Global proxy pool with per-site blacklisting
-- 👤 **Account Vault** - Centralized credential management for automation
+- 👤 **Account Vault** - Centralized credential management with Proxy Assignment support
+- 🔗 **Proxy History Tracking** - Enforce "1 Account per Website per Proxy" compliance automatically
 - 🤖 **Flexible Profile Modes** - Manual, Automated, or Command Center (Orchestrator) profiles
 - 📚 **Script Library** - Centralized database for modular, reusable scripts
 - 🔗 **Script Chaining** - Execute multiple scripts in sequence within a single profile
@@ -22,6 +21,7 @@ A distributed browser automation platform for developers. Manage multiple browse
 - 📸 **Screenshots & Videos** - Automatic capture and gallery viewing
 - 📊 **Resource Monitoring** - Non-blocking memory, CPU, and network metrics per context
 - 🔄 **Auto-Dependency Install** - Scripts can define requirements installed at runtime
+- 🚑 **Crash Recovery** - Automatic detection and state reconciliation of ghost profiles on server restart
 
 ## Architecture
 
@@ -370,6 +370,7 @@ MIT License - see [LICENSE](./LICENSE)
 - [x] Inter-Profile Communication
 - [x] PyAutoGUI Support
 - [x] PostgreSQL Persistence
+- [x] Proxy History Tracking
 - [ ] Docker support
 - [ ] LLM Orchestrator Integration
 
@@ -498,6 +499,7 @@ class ContextManager:
         self.proxies: Dict[str, ProxyConfig] = {}
 
         # Xvfb Manager handles virtual displays for isolation
+        # Initialized here, lifecycle managed by Server startup/shutdown
         self.xvfb_manager = XvfbManager()
 
         # Ensure data directories exist
@@ -540,8 +542,8 @@ class ContextManager:
         Create a fully isolated browser profile environment.
 
         Workflow:
-        1. Allocate a dedicated Xvfb display.
-        2. Launch a dedicated Chromium process bound to that display.
+        1. Allocate a dedicated Xvfb display (Async).
+        2. Launch a dedicated Chromium process bound to that display (with Timeout).
         3. Create a Browser Context with Proxy (Optional) & Geolocation settings.
         4. Inject Stealth Scripts to mask automation signatures.
         5. Initialize Script Runner and Resource Monitors.
@@ -549,9 +551,10 @@ class ContextManager:
         if profile.id in self.contexts:
             raise ValueError(f"Profile {profile.id} already exists")
 
-        # --- 1. Resource Allocation: Xvfb Display ---
+        # --- 1. Resource Allocation: Async Xvfb Display ---
         try:
-            display_str = self.xvfb_manager.start_display(profile.id)
+            # FIX: Await the async Xvfb manager
+            display_str = await self.xvfb_manager.start_display(profile.id)
             logger.info(f"[{profile.id}] Allocated Display: {display_str}")
         except Exception as e:
             logger.error(f"[{profile.id}] Failed to start Xvfb display: {e}")
@@ -581,21 +584,29 @@ class ContextManager:
                 # No proxy selected (None)
                 logger.info(f"[{profile.id}] No proxy selected. Running direct connection.")
 
-            # Launch Browser Instance
-            # Note: We launch one browser per profile to ensure thread-safe PyAutoGUI usage on specific displays.
-            browser = await self.playwright.chromium.launch(
-                headless=False,  # Must be headful for Xvfb/PyAutoGUI rendering
-                proxy=proxy_config, # Playwright handles None correctly (Direct connection)
-                args=[
-                    "--disable-blink-features=AutomationControlled",  # Mask Chrome automation flags
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",  # Often helpful in Xvfb
-                    "--disable-infobars",
-                    "--start-maximized",
-                ],
-                env={"DISPLAY": display_str} # Critical: Bind browser to specific display
-            )
+            # Launch Browser Instance with Timeout
+            # FIX: Wrapped in wait_for to prevent indefinite hangs
+            try:
+                browser = await asyncio.wait_for(
+                    self.playwright.chromium.launch(
+                        headless=False,  # Must be headful for Xvfb/PyAutoGUI rendering
+                        proxy=proxy_config, # Playwright handles None correctly (Direct connection)
+                        args=[
+                            "--disable-blink-features=AutomationControlled",  # Mask Chrome automation flags
+                            "--no-sandbox",
+                            "--disable-dev-shm-usage",
+                            "--disable-gpu",  # Often helpful in Xvfb
+                            "--disable-infobars",
+                            "--start-maximized",
+                        ],
+                        env={"DISPLAY": display_str} # Critical: Bind browser to specific display
+                    ),
+                    timeout=60.0 # 60 second hard timeout for launch
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"[{profile.id}] Browser launch timed out after 60s.")
+                raise RuntimeError("Browser launch timed out")
+
             self.browsers[profile.id] = browser
 
             # --- CRITICAL: Extract PID for Memory Monitor ---
@@ -607,7 +618,8 @@ class ContextManager:
 
         except Exception as e:
             logger.error(f"[{profile.id}] Browser launch failed: {e}")
-            self.xvfb_manager.stop_display(profile.id) # Cleanup Display if browser fails
+            # FIX: Await cleanup of Xvfb
+            await self.xvfb_manager.stop_display(profile.id)
             raise RuntimeError(f"Browser launch failed: {e}")
 
         # --- 3. Context Creation & Stealth Injection ---
@@ -661,7 +673,8 @@ class ContextManager:
             logger.error(f"[{profile.id}] Context creation failed: {e}")
             if browser: await browser.close()
             del self.browsers[profile.id]
-            self.xvfb_manager.stop_display(profile.id)
+            # FIX: Await cleanup
+            await self.xvfb_manager.stop_display(profile.id)
             raise
 
         # --- 4. Logic Initialization: Runner & Monitor ---
@@ -752,7 +765,8 @@ class ContextManager:
             del self.browsers[profile_id]
 
         # 5. Release Xvfb Display
-        self.xvfb_manager.stop_display(profile_id)
+        # FIX: Await the async stop_display method
+        await self.xvfb_manager.stop_display(profile_id)
 
         logger.info(f"⏹ Profile {profile_id} stopped and resources released")
 
@@ -903,7 +917,7 @@ class MemoryMonitor:
         context: BrowserContext,
         threshold_mb: int,
         on_threshold_exceeded: Callable,
-        browser_pid: Optional[int] = None  # New: Accept the Browser PID for accurate tracking
+        browser_pid: Optional[int] = None
     ):
         self.profile_id = profile_id
         self.context = context
@@ -941,7 +955,7 @@ class MemoryMonitor:
                 memory_mb = await self._get_memory_usage()
                 self.current_memory_mb = memory_mb
 
-                # Get CPU usage
+                # Get CPU usage (Non-blocking)
                 cpu = await self._get_cpu_usage()
                 self.cpu_percent = cpu
 
@@ -1025,19 +1039,23 @@ class MemoryMonitor:
     async def _get_cpu_usage(self) -> float:
         """
         Get accurate CPU usage percentage of the browser process tree.
+        NON-BLOCKING: Uses interval=None (snapshot mode).
         """
         try:
             if self.browser_pid:
                 try:
                     parent = psutil.Process(self.browser_pid)
-                    # Get CPU for parent
-                    cpu_total = parent.cpu_percent(interval=0.1)
+
+                    # FIX: Use interval=None (Non-blocking).
+                    # Returns 0.0 on first call, then average usage since last call.
+                    cpu_total = parent.cpu_percent(interval=None)
 
                     # Sum CPU of all children
                     children = parent.children(recursive=True)
                     for child in children:
                         try:
-                            cpu_total += child.cpu_percent(interval=0.1)
+                            # Also non-blocking for children
+                            cpu_total += child.cpu_percent(interval=None)
                         except (psutil.NoSuchProcess, psutil.AccessDenied):
                             continue
 
@@ -1046,8 +1064,8 @@ class MemoryMonitor:
                 except psutil.NoSuchProcess:
                     return 0.0
 
-            # Fallback: System-wide CPU (Not ideal for profile-specific)
-            return psutil.cpu_percent(interval=0.1)
+            # Fallback: System-wide CPU (Non-blocking)
+            return psutil.cpu_percent(interval=None)
 
         except Exception as e:
             logger.error(f"Error getting CPU usage: {e}")
@@ -1206,7 +1224,7 @@ class ServerHealth(BaseModel):
 
 server/src/models_db.py
 
-from sqlalchemy import Column, String, Integer, DateTime, Enum
+from sqlalchemy import Column, String, Integer, DateTime, Enum, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from .database import Base  # UPDATED: Import shared Base from database.py
@@ -1218,6 +1236,7 @@ import enum
 
 class ProfileStatusDB(str, enum.Enum):
     IDLE = "idle"
+    INITIALIZING = "initializing" # NEW: Added for background startup
     RUNNING = "running"
     PAUSED = "paused"
     STOPPED = "stopped"
@@ -1233,7 +1252,7 @@ class ProfileModeDB(str, enum.Enum):
 # Models
 # -----------------------------------------------
 
-class DbProfile(Base):  # FIXED: Renamed from ProfileModel to DbProfile to match server.py import
+class DbProfile(Base):
     """
     SQL Table for Profiles.
     Replaces the in-memory 'profiles' dictionary.
@@ -1272,7 +1291,7 @@ class DbProfile(Base):  # FIXED: Renamed from ProfileModel to DbProfile to match
         return f"<Profile(id={self.id}, name={self.name}, status={self.status})>"
 
 
-class ProxyModel(Base):
+class DbProxy(Base):
     """
     SQL Table for Proxies.
     Allows persistence of proxy configurations linked to profiles.
@@ -1295,6 +1314,56 @@ class ProxyModel(Base):
 
     def __repr__(self):
         return f"<Proxy(id={self.id}, host={self.host})>"
+
+
+class DbAccount(Base):
+    """
+    SQL Table for Accounts.
+    Centralized credential management for automation.
+    """
+    __tablename__ = "accounts"
+
+    id = Column(String, primary_key=True, index=True)
+    platform = Column(String, nullable=False)
+    platform_url = Column(String, nullable=True)
+    username = Column(String, nullable=False)
+    password = Column(String, nullable=False) # Ideally encrypted at rest
+    email = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    notes = Column(String, nullable=True)
+
+    # Status
+    status = Column(String, default="active")
+    banned = Column(String, default="false")
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_used = Column(DateTime(timezone=True), nullable=True)
+
+    def __repr__(self):
+        return f"<Account(id={self.id}, username={self.username})>"
+
+
+class DbProxyHistory(Base):
+    """
+    Tracks usage of a specific Account on a specific Proxy for a specific Site.
+    Ensures '1 Account per Site per Proxy' compliance.
+    """
+    __tablename__ = "proxy_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(String, nullable=False, index=True)
+    proxy_id = Column(String, nullable=False, index=True)
+    website = Column(String, nullable=False) # e.g., 'instagram.com'
+    last_used = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Enforce that one account is only used on one proxy per website
+    __table_args__ = (
+        UniqueConstraint('account_id', 'website', name='uix_account_website'),
+    )
+
+    def __repr__(self):
+        return f"<ProxyHistory(account={self.account_id}, proxy={self.proxy_id}, site={self.website})>"
 
 server/src/script_runner.py
 
@@ -1566,12 +1635,13 @@ import argparse
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends, BackgroundTasks
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
+from sqlalchemy.sql import func
 
 # Local Imports
 from .models import (
@@ -1585,7 +1655,7 @@ from .utils import generate_api_key, get_memory_usage, get_cached_cpu_usage
 
 # Database Imports
 from .database import get_db, init_db, AsyncSessionLocal
-from .models_db import DbProfile
+from .models_db import DbProfile, DbProxyHistory
 
 # Set up logging
 logging.basicConfig(
@@ -1605,6 +1675,48 @@ shared_state_data: Dict[str, Any] = {}
 command_center_id: Optional[str] = None
 
 
+# ---------------------------------------------------------
+# BACKGROUND TASKS
+# ---------------------------------------------------------
+
+async def initialize_profile_task(profile_id: str, profile_pydantic: Profile, accounts: Dict[str, dict]):
+    """
+    Heavy initialization logic that runs in the background.
+    This prevents the HTTP request from timing out.
+    """
+    try:
+        # 1. Create the browser context (Heavy operation)
+        await context_manager.create_profile(profile_pydantic, accounts)
+
+        # 2. Start execution
+        await context_manager.start_profile(profile_id)
+
+        # 3. Update Database to RUNNING
+        async with AsyncSessionLocal() as db:
+            stmt = select(DbProfile).where(DbProfile.id == profile_id)
+            result = await db.execute(stmt)
+            p = result.scalar_one()
+            p.status = ProfileStatus.RUNNING
+            await db.commit()
+            logger.info(f"Profile {profile_id} background initialization successful.")
+
+    except Exception as e:
+        logger.error(f"Background initialization failed for {profile_id}: {e}")
+
+        # Update Database to CRASHED
+        async with AsyncSessionLocal() as db:
+            stmt = select(DbProfile).where(DbProfile.id == profile_id)
+            result = await db.execute(stmt)
+            p = result.scalar_one_or_none()
+            if p:
+                p.status = ProfileStatus.CRASHED
+                await db.commit()
+
+        # Cleanup resources if partially created
+        if profile_id in context_manager.browsers or profile_id in context_manager.xvfb_manager.active_displays:
+             await context_manager.stop_profile(profile_id)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
@@ -1617,7 +1729,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("✓ Database initialized")
 
-    # 2. Initialize Xvfb Manager
+    # 2. Initialize Xvfb Manager (Global/Legacy)
     xvfb = XvfbManager()
 
     # 3. Start context manager
@@ -1629,12 +1741,12 @@ async def lifespan(app: FastAPI):
     # If server restarted, any 'running' profiles in DB are actually dead.
     # We must mark them as STOPPED.
     async with AsyncSessionLocal() as session:
-        stmt = select(DbProfile).where(DbProfile.status.in_([ProfileStatus.RUNNING, ProfileStatus.PAUSED]))
+        stmt = select(DbProfile).where(DbProfile.status.in_([ProfileStatus.RUNNING, ProfileStatus.PAUSED, ProfileStatus.INITIALIZING]))
         result = await session.execute(stmt)
         active_profiles = result.scalars().all()
 
         if active_profiles:
-            logger.warning(f"Found {len(active_profiles)} profiles in RUNNING/PAUSED state during startup. Marking as STOPPED.")
+            logger.warning(f"Found {len(active_profiles)} profiles in ACTIVE state during startup. Marking as STOPPED.")
             for p in active_profiles:
                 p.status = ProfileStatus.STOPPED
             await session.commit()
@@ -1657,7 +1769,8 @@ async def lifespan(app: FastAPI):
     if context_manager:
         await context_manager.stop()
     if xvfb:
-        xvfb.stop_all()
+        # Stop all managed displays on shutdown
+        await xvfb.stop_all()
 
 
 app = FastAPI(
@@ -1840,10 +1953,15 @@ async def get_profile(profile_id: str, _=verify_api_key, db: AsyncSession = Depe
 async def start_profile(
     profile_id: str,
     accounts: Dict[str, dict],
+    background_tasks: BackgroundTasks,
     _=verify_api_key,
     db: AsyncSession = Depends(get_db)
 ):
-    """Start a profile (Launch browser and run scripts)"""
+    """
+    Start a profile.
+    Returns immediately with status 'initializing'.
+    Actual startup happens in background to prevent timeouts.
+    """
     global command_center_id
 
     result = await db.execute(select(DbProfile).where(DbProfile.id == profile_id))
@@ -1857,60 +1975,34 @@ async def start_profile(
         if command_center_id and command_center_id != profile_id:
              raise HTTPException(400, "A Command Center is already running.")
 
-    # Update Status in DB
-    profile.status = ProfileStatus.RUNNING
+    # Update Status in DB immediately
+    profile.status = ProfileStatus.INITIALIZING
     await db.commit()
 
     accounts_cache[profile_id] = accounts
-    display_str = "unknown"
 
-    # Create context if not exists
-    if profile_id not in context_manager.contexts:
-        # --- FIX: Run Xvfb start in a thread to prevent blocking the server ---
-        loop = asyncio.get_event_loop()
-        try:
-            # Run the synchronous Xvfb start in an executor (thread)
-            display_str = await loop.run_in_executor(
-                None,
-                xvfb.start_display,
-                profile_id
-            )
-            logger.info(f"Assigned display {display_str} to profile {profile_id}")
-        except Exception as e:
-            logger.error(f"Failed to start Xvfb for {profile_id}: {e}")
-            profile.status = ProfileStatus.CRASHED
-            await db.commit()
-            raise HTTPException(500, "Failed to initialize virtual display")
+    # Convert DB profile to Pydantic for context manager
+    profile_data = {
+        "id": profile.id,
+        "name": profile.name,
+        "mode": profile.mode,
+        "proxy_id": profile.proxy_id,
+        "user_agent": profile.user_agent,
+        "timezone": profile.timezone,
+        "locale": profile.locale,
+        "geolocation": profile.geolocation,
+        "scripts": profile.scripts,
+        "requirements": profile.requirements,
+        "memory_threshold_mb": profile.memory_threshold_mb,
+        "status": profile.status,
+        "created_at": profile.created_at
+    }
+    profile_pydantic = Profile(**profile_data)
 
-        # Convert DB profile to Pydantic for context manager compatibility
-        # Using model_validate (Pydantic v2) or from_orm (v1) depending on setup
-        # We construct manually here to be safe across versions
-        profile_data = {
-            "id": profile.id,
-            "name": profile.name,
-            "mode": profile.mode,
-            "proxy_id": profile.proxy_id,
-            "user_agent": profile.user_agent,
-            "timezone": profile.timezone,
-            "locale": profile.locale,
-            "geolocation": profile.geolocation,
-            "scripts": profile.scripts,
-            "requirements": profile.requirements,
-            "memory_threshold_mb": profile.memory_threshold_mb,
-            "status": profile.status,
-            "created_at": profile.created_at
-        }
-        profile_pydantic = Profile(**profile_data)
+    # Schedule the heavy startup logic in the background
+    background_tasks.add_task(initialize_profile_task, profile_id, profile_pydantic, accounts)
 
-        await context_manager.create_profile(profile_pydantic, accounts, display_str)
-    else:
-        info = xvfb.active_displays.get(profile_id)
-        if info:
-            display_str = f":{info[1]}"
-
-    await context_manager.start_profile(profile_id)
-
-    return {"status": "started", "display": display_str}
+    return {"status": "initializing"}
 
 
 @app.post("/profiles/{profile_id}/pause")
@@ -1941,8 +2033,8 @@ async def stop_profile(profile_id: str, _=verify_api_key, db: AsyncSession = Dep
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
+    # ContextManager handles Xvfb cleanup internally
     await context_manager.stop_profile(profile_id)
-    xvfb.stop_display(profile_id)
 
     profile.status = ProfileStatus.STOPPED
     await db.commit()
@@ -1966,10 +2058,8 @@ async def delete_profile(profile_id: str, _=verify_api_key, db: AsyncSession = D
         raise HTTPException(status_code=404, detail="Profile not found")
 
     if profile_id in context_manager.contexts:
+        # ContextManager handles Xvfb cleanup internally
         await context_manager.stop_profile(profile_id)
-
-    if profile_id in xvfb.active_displays:
-        xvfb.stop_display(profile_id)
 
     await db.delete(profile)
     await db.commit()
@@ -1981,6 +2071,52 @@ async def delete_profile(profile_id: str, _=verify_api_key, db: AsyncSession = D
         command_center_id = None
 
     return {"status": "deleted"}
+
+
+# ---------------------------------------------------------
+# HISTORY & COMPLIANCE
+# ---------------------------------------------------------
+
+@app.post("/history/record")
+async def record_proxy_history(
+    account_id: str,
+    proxy_id: str,
+    website: str,
+    _=verify_api_key,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Record that an account used a specific proxy for a specific website.
+    Enforces '1 Account per Website per Proxy' logic.
+    """
+    # Check for conflicts
+    stmt = select(DbProxyHistory).where(
+        DbProxyHistory.account_id == account_id,
+        DbProxyHistory.website == website
+    )
+    result = await db.execute(stmt)
+    existing = result.scalar_one_or_none()
+
+    if existing:
+        if existing.proxy_id != proxy_id:
+            # Conflict: Account used this website with a DIFFERENT proxy
+            raise HTTPException(
+                status_code=400,
+                detail=f"Conflict: Account {account_id} already used {website} with proxy {existing.proxy_id}"
+            )
+        # Update timestamp
+        existing.last_used = func.now()
+    else:
+        # Create new record
+        new_entry = DbProxyHistory(
+            account_id=account_id,
+            proxy_id=proxy_id,
+            website=website
+        )
+        db.add(new_entry)
+
+    await db.commit()
+    return {"status": "recorded"}
 
 
 # ---------------------------------------------------------
@@ -2283,9 +2419,9 @@ class VNCHandler:
 
 server/src/xvfb_manager.py
 
+import asyncio
 import subprocess
 import os
-import time
 import logging
 from typing import Dict, Tuple, Optional
 
@@ -2305,25 +2441,24 @@ class XvfbManager:
         self.resolution = resolution
 
         # Global/Legacy process (kept for backwards compatibility or server-wide needs)
-        self.process: Optional[subprocess.Popen] = None
+        self.process: Optional[asyncio.subprocess.Process] = None
         self.display: str = f":{base_display}"
 
         # Per-Profile Management
         # Structure: { profile_id: (process_handle, display_number) }
-        # FIXED: Renamed from managed_displays to active_displays to match server.py
-        self.active_displays: Dict[str, Tuple[subprocess.Popen, int]] = {}
+        self.active_displays: Dict[str, Tuple[asyncio.subprocess.Process, int]] = {}
 
         # Track used display numbers to find available slots quickly
         self._used_display_numbers: set = set()
 
     # ==========================================
-    # Legacy Global Methods (Preserved)
+    # Legacy Global Methods (Async Compatible)
     # ==========================================
 
-    def start(self):
+    async def start(self):
         """Start the default global Xvfb virtual display (Legacy/Default)"""
         try:
-            if self._is_running(self.display):
+            if await self._is_running(self.display):
                 logger.info(f"Xvfb already running on {self.display}")
                 os.environ["DISPLAY"] = self.display
                 return
@@ -2338,16 +2473,18 @@ class XvfbManager:
                 "-noreset"
             ]
 
-            self.process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+            # Use asyncio subprocess
+            self.process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
             )
 
-            time.sleep(2)  # Wait for Xvfb to be ready
+            # Wait for Xvfb to be ready
+            await asyncio.sleep(2)
 
             # Verify it started
-            if not self._is_running(self.display):
+            if not await self._is_running(self.display):
                  raise RuntimeError(f"Failed to start global Xvfb on {self.display}")
 
             os.environ["DISPLAY"] = self.display
@@ -2358,14 +2495,16 @@ class XvfbManager:
             logger.error(f"Failed to start Xvfb: {e}")
             raise
 
-    def stop(self):
+    async def stop(self):
         """Stop the global Xvfb instance"""
         if self.process:
-            self.process.terminate()
             try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
+                self.process.terminate()
+                await asyncio.wait_for(self.process.wait(), timeout=5)
+            except asyncio.TimeoutError:
                 self.process.kill()
+            except ProcessLookupError:
+                pass
 
             if self.base_display in self._used_display_numbers:
                 self._used_display_numbers.remove(self.base_display)
@@ -2373,12 +2512,12 @@ class XvfbManager:
             logger.info("Global Xvfb stopped")
 
     # ==========================================
-    # Per-Profile Methods (New)
+    # Per-Profile Methods (Async Non-Blocking)
     # ==========================================
 
-    def start_display(self, profile_id: str) -> str:
+    async def start_display(self, profile_id: str) -> str:
         """
-        Starts a dedicated Xvfb display for a specific profile.
+        Starts a dedicated Xvfb display for a specific profile ASYNCHRONOUSLY.
         This allows concurrent PyAutoGUI usage across multiple profiles.
 
         Args:
@@ -2401,18 +2540,19 @@ class XvfbManager:
         try:
             logger.info(f"Allocating display {display_str} for profile {profile_id}...")
 
-            # --- NEW: CLEANUP STALE LOCK FILES ---
-            # This fixes the "Xvfb failed to start" error caused by leftover lock files
+            # --- CLEANUP STALE LOCK FILES (Non-Blocking) ---
             lock_file = f"/tmp/.X{display_num}-lock"
             if os.path.exists(lock_file):
                 logger.warning(f"Removing stale Xvfb lock file: {lock_file}")
                 try:
-                    os.remove(lock_file)
+                    # Run os.remove in executor to prevent blocking loop
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, os.remove, lock_file)
                 except OSError as e:
                     logger.error(f"Failed to remove lock file: {e}")
             # -------------------------------------
 
-            # 3. Launch Xvfb
+            # 3. Launch Xvfb (Async)
             cmd = [
                 "Xvfb",
                 display_str,
@@ -2423,22 +2563,28 @@ class XvfbManager:
                 "-noreset"
             ]
 
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE # Capture stderr to debug if it fails
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE
             )
 
-            # 4. Wait and verify
-            time.sleep(1)
-            if not self._is_running(display_str):
-                # Try to read stderr if available
-                stderr_output = ""
-                try:
-                    stderr_output = proc.stderr.read().decode()
-                except:
-                    pass
-                raise RuntimeError(f"Xvfb failed to start on {display_str}. Stderr: {stderr_output}")
+            # 4. Wait and verify (Non-Blocking Poll)
+            # Wait up to 5 seconds for display to be ready
+            start_time = asyncio.get_event_loop().time()
+            while True:
+                if await self._is_running(display_str):
+                    break
+
+                if asyncio.get_event_loop().time() - start_time > 5:
+                    # Timeout, kill process and raise error
+                    try:
+                        proc.kill()
+                        await proc.wait()
+                    except: pass
+                    raise RuntimeError(f"Xvfb failed to start on {display_str} within 5s")
+
+                await asyncio.sleep(0.2)
 
             # 5. Register
             self.active_displays[profile_id] = (proc, display_num)
@@ -2454,7 +2600,7 @@ class XvfbManager:
                 self._used_display_numbers.remove(display_num)
             raise
 
-    def stop_display(self, profile_id: str):
+    async def stop_display(self, profile_id: str):
         """
         Stops the Xvfb display associated with a specific profile.
         """
@@ -2467,9 +2613,11 @@ class XvfbManager:
 
         try:
             proc.terminate()
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
             proc.kill()
+        except ProcessLookupError:
+            pass
         except Exception as e:
             logger.error(f"Error stopping display for {profile_id}: {e}")
         finally:
@@ -2489,37 +2637,36 @@ class XvfbManager:
         candidate = self.base_display + 1
         while True:
             if candidate not in self._used_display_numbers:
-                # Double check it's not used by an external process
-                if not self._is_running(f":{candidate}"):
-                    return candidate
+                # Note: We skip the _is_running check here to keep this sync/fast
+                # The start_display will handle conflicts via lock file cleanup
+                return candidate
             candidate += 1
             # Safety break to prevent infinite loops in extreme cases
             if candidate > self.base_display + 1000:
                 raise RuntimeError("Could not find an available display number")
 
-    def _is_running(self, display: str) -> bool:
-        """Check if Xvfb is running on a specific display"""
+    async def _is_running(self, display: str) -> bool:
+        """Check if Xvfb is running on a specific display ASYNCHRONOUSLY"""
         try:
-            subprocess.run(
-                ["xdpyinfo", "-display", display],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-                timeout=2
+            proc = await asyncio.create_subprocess_exec(
+                "xdpyinfo", "-display", display,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
             )
-            return True
-        except:
+            await proc.communicate()
+            return proc.returncode == 0
+        except Exception:
             return False
 
-    def stop_all(self):
+    async def stop_all(self):
         """Stops all managed displays and the global instance."""
         # Stop all profile-specific displays
         # Convert to list to avoid modification during iteration
         for profile_id in list(self.active_displays.keys()):
-            self.stop_display(profile_id)
+            await self.stop_display(profile_id)
 
         # Stop global
-        self.stop()
+        await self.stop()
 
         logger.info("All Xvfb instances stopped.")
 
@@ -4655,6 +4802,7 @@ import {
   Trash2,
   Code,
   Circle,
+  Loader, // NEW: Added for Initializing state
 } from "lucide-react";
 import store from "../store/db";
 import { apiClient } from "../api/client";
@@ -4684,80 +4832,84 @@ function ProfileManager() {
     memoryThresholdMb: 400,
   });
 
-  // Load data initially AND when servers context updates (to allow syncing)
+  // --- DATA LOADING & SYNCING ---
+
+  // Load data initially AND when servers context updates
   useEffect(() => {
     loadData();
+
+    // NEW: Poll every 5 seconds to update status (e.g., Initializing -> Running)
+    // This ensures the UI reflects the background task completion.
+    const intervalId = setInterval(() => {
+      syncProfileStatuses();
+    }, 5000);
+
+    return () => clearInterval(intervalId);
   }, [servers]);
 
   const loadData = async () => {
-    // 1. Load Local Data
+    // 1. Load Local Data First (Optimistic UI)
     const localProfiles = (await store.get("profiles")) || [];
     setProxies((await store.get("proxies")) || []);
     setAccounts((await store.get("accounts")) || []);
     setScripts((await store.get("scripts")) || []);
 
-    // 2. Sync with Server (Crash Recovery / State Reconciliation)
-    // If the server restarted, profiles might be 'stopped' on server but 'running' locally.
-    // We merge server truth into local state.
+    // Set local profiles immediately
+    setProfiles(localProfiles);
 
-    // Create a mutable copy to update
-    let syncedProfiles = [...localProfiles];
+    // 2. Then sync with server in background
+    await syncProfileStatuses(localProfiles);
+  };
+
+  const syncProfileStatuses = async (currentProfiles = null) => {
+    const localProfiles =
+      currentProfiles || (await store.get("profiles")) || [];
+
+    if (!servers || servers.length === 0) return;
+
     let needsDbUpdate = false;
+    const updatedProfiles = [...localProfiles];
 
-    if (servers && servers.length > 0) {
-      for (const server of servers) {
-        try {
-          // Fetch profiles known by this server
-          const serverProfiles = await apiClient.listProfiles(server.id);
-          const serverMap = new Map(serverProfiles.map((p) => [p.id, p]));
+    for (const server of servers) {
+      // Only sync if server is online
+      if (healthData[server.id]?.status !== "online") continue;
 
-          // Update local profiles that belong to this server
-          syncedProfiles = syncedProfiles.map((p) => {
-            if (p.serverId === server.id) {
-              const serverVersion = serverMap.get(p.id);
-              // If server knows about it, take its status
-              if (serverVersion) {
-                if (p.status !== serverVersion.status) {
-                  needsDbUpdate = true;
-                  return { ...p, status: serverVersion.status };
-                }
-              } else {
-                // If server DOES NOT know about it (DB reset), mark as stopped or log warning.
-                // For now, we mark stopped so user can delete or restart.
-                if (p.status !== "stopped" && p.status !== "idle") {
-                  needsDbUpdate = true;
-                  return { ...p, status: "stopped" };
-                }
-              }
+      try {
+        const serverProfiles = await apiClient.listProfiles(server.id);
+        const serverMap = new Map(serverProfiles.map((p) => [p.id, p]));
+
+        updatedProfiles.forEach((p, index) => {
+          if (p.serverId === server.id && serverMap.has(p.id)) {
+            const serverVersion = serverMap.get(p.id);
+            // Update status if changed
+            if (p.status !== serverVersion.status) {
+              updatedProfiles[index] = { ...p, status: serverVersion.status };
+              needsDbUpdate = true;
             }
-            return p;
-          });
-        } catch (error) {
-          console.warn(
-            `Failed to sync profiles for server ${server.name}:`,
-            error,
-          );
-        }
+          }
+        });
+      } catch (error) {
+        console.warn(`Sync failed for server ${server.name}:`, error);
       }
     }
 
-    setProfiles(syncedProfiles);
     if (needsDbUpdate) {
-      await store.set("profiles", syncedProfiles);
+      setProfiles(updatedProfiles);
+      await store.set("profiles", updatedProfiles);
     }
   };
+
+  // --- ACTIONS ---
 
   const createProfile = async () => {
     try {
       const server = servers.find((s) => s.id === newProfile.serverId);
 
-      // Basic Server Validation
       if (!server) {
         alert("Please select a valid server.");
         return;
       }
 
-      // --- COMMAND CENTER VALIDATION ---
       if (profileMode === "command_center") {
         const existingCC = profiles.find((p) => p.mode === "command_center");
         if (existingCC) {
@@ -4768,21 +4920,17 @@ function ProfileManager() {
         }
       }
 
-      // --- PROXY VALIDATION (Optional Logic) ---
-      // If proxyId is "none" or empty, we treat it as null (No Proxy)
       const isNoProxy =
         newProfile.proxyId === "none" || newProfile.proxyId === "";
       const proxy = isNoProxy
         ? null
         : proxies.find((p) => p.id === newProfile.proxyId);
 
-      // If user selected something that isn't "none" but we couldn't find it, error
       if (!isNoProxy && !proxy) {
         alert("Invalid proxy selected.");
         return;
       }
 
-      // Script Validation (Only for Automated/CC modes)
       if (profileMode !== "manual" && selectedScriptIds.length === 0) {
         alert(
           "Please select at least one script for Automated/Command Center modes.",
@@ -4790,13 +4938,10 @@ function ProfileManager() {
         return;
       }
 
-      // 1. Prepare Scripts and Requirements
       const selectedScripts = scripts.filter((s) =>
         selectedScriptIds.includes(s.id),
       );
       const scriptCodes = selectedScripts.map((s) => s.code);
-
-      // Aggregate unique requirements
       const requirements = [
         ...new Set(selectedScripts.flatMap((s) => s.requirements || [])),
       ];
@@ -4805,28 +4950,26 @@ function ProfileManager() {
       const result = await apiClient.createProfile(server.id, {
         name: newProfile.name,
         mode: profileMode,
-        proxy_id: proxy ? proxy.id : null, // Send null if No Proxy
+        proxy_id: proxy ? proxy.id : null,
         user_agent: newProfile.userAgent || undefined,
         timezone: newProfile.timezone,
         locale: newProfile.locale,
-        scripts: scriptCodes, // Send array of code
-        requirements: requirements, // Send aggregated requirements
+        scripts: scriptCodes,
+        requirements: requirements,
         memory_threshold_mb: newProfile.memoryThresholdMb,
       });
 
-      // 3. Register proxy with server (Only if a proxy is selected)
       if (proxy) {
         await apiClient.registerProxy(server.id, proxy);
       }
 
-      // 4. Save locally
       const profile = {
         id: result.id,
         localId: `profile_${Date.now()}`,
         ...newProfile,
         mode: profileMode,
-        proxyId: proxy ? proxy.id : null, // Store null locally for clarity
-        scriptIds: selectedScriptIds, // Store IDs for reference
+        proxyId: proxy ? proxy.id : null,
+        scriptIds: selectedScriptIds,
         status: "idle",
         createdAt: new Date().toISOString(),
       };
@@ -4837,7 +4980,6 @@ function ProfileManager() {
 
       setShowAddModal(false);
       resetNewProfile();
-
       alert("Profile created successfully!");
     } catch (error) {
       console.error("Failed to create profile:", error);
@@ -4862,23 +5004,21 @@ function ProfileManager() {
 
   const startProfile = async (profile) => {
     try {
-      // Check if trying to start a second Command Center
       if (profile.mode === "command_center") {
         const runningCC = profiles.find(
           (p) =>
             p.mode === "command_center" &&
-            p.status === "running" &&
+            ["running", "initializing"].includes(p.status) &&
             p.id !== profile.id,
         );
         if (runningCC) {
           alert(
-            `Cannot start: Command Center "${runningCC.name}" is already running. Only one active CC allowed.`,
+            `Cannot start: Command Center "${runningCC.name}" is already active.`,
           );
           return;
         }
       }
 
-      // Get accounts for this profile
       const profileAccounts = {};
       profile.accountIds.forEach((accountId) => {
         const account = accounts.find((a) => a.id === accountId);
@@ -4898,22 +5038,28 @@ function ProfileManager() {
         profileAccounts,
       );
 
-      // Update local status
+      // Optimistic UI Update: Set to 'initializing' immediately
       const updatedProfiles = profiles.map((p) =>
-        p.id === profile.id ? { ...p, status: "running" } : p,
+        p.id === profile.id ? { ...p, status: "initializing" } : p,
       );
-      await store.set("profiles", updatedProfiles);
       setProfiles(updatedProfiles);
+      await store.set("profiles", updatedProfiles);
     } catch (error) {
       console.error("Failed to start profile:", error);
-      alert("Failed to start profile: " + error.message);
+      const errorMsg = error.response?.data?.detail || error.message;
+      alert("Failed to start profile: " + errorMsg);
+
+      // Revert to stopped on failure
+      const updatedProfiles = profiles.map((p) =>
+        p.id === profile.id ? { ...p, status: "stopped" } : p,
+      );
+      setProfiles(updatedProfiles);
     }
   };
 
   const pauseProfile = async (profile) => {
     try {
       await apiClient.pauseProfile(profile.serverId, profile.id);
-
       const updatedProfiles = profiles.map((p) =>
         p.id === profile.id ? { ...p, status: "paused" } : p,
       );
@@ -4928,7 +5074,6 @@ function ProfileManager() {
   const stopProfile = async (profile) => {
     try {
       await apiClient.stopProfile(profile.serverId, profile.id);
-
       const updatedProfiles = profiles.map((p) =>
         p.id === profile.id ? { ...p, status: "stopped" } : p,
       );
@@ -4945,22 +5090,20 @@ function ProfileManager() {
       return;
 
     try {
-      // Attempt to delete from server
       await apiClient.deleteProfile(profile.serverId, profile.id);
     } catch (error) {
       console.warn(
-        "Server delete failed (ghost profile or server missing):",
+        "Server delete failed (proceeding with local delete):",
         error,
       );
-      // We proceed to delete locally anyway. This allows cleanup of "ghost" profiles
-      // if the server was reset or the server ID is invalid.
     }
 
-    // Always remove from local store
     const updatedProfiles = profiles.filter((p) => p.id !== profile.id);
     await store.set("profiles", updatedProfiles);
     setProfiles(updatedProfiles);
   };
+
+  // --- HELPERS ---
 
   const getServerName = (serverId) => {
     const server = servers.find((s) => s.id === serverId);
@@ -4980,8 +5123,9 @@ function ProfileManager() {
       .join(", ");
   };
 
-  // Check if a Command Center already exists to disable option
   const commandCenterExists = profiles.some((p) => p.mode === "command_center");
+
+  // --- RENDER ---
 
   return (
     <div>
@@ -5036,14 +5180,24 @@ function ProfileManager() {
               </div>
 
               <div className="flex items-center space-x-3">
-                <span className={`status-badge status-${profile.status}`}>
+                <span
+                  className={`status-badge status-${profile.status === "initializing" ? "idle" : profile.status}`}
+                >
                   {profile.status}
                 </span>
 
-                {profile.status === "idle" || profile.status === "stopped" ? (
+                {/* ACTION BUTTONS */}
+                {profile.status === "initializing" ? (
+                  <button className="btn btn-secondary" disabled>
+                    <Loader className="w-4 h-4 animate-spin" />
+                  </button>
+                ) : profile.status === "idle" ||
+                  profile.status === "stopped" ||
+                  profile.status === "crashed" ? (
                   <button
                     onClick={() => startProfile(profile)}
                     className="btn btn-success"
+                    title="Start Profile"
                   >
                     <Play className="w-4 h-4" />
                   </button>
@@ -5159,7 +5313,7 @@ function ProfileManager() {
                 )}
               </div>
 
-              {/* Server Selection (Updated UI with Status) */}
+              {/* Server Selection */}
               <div>
                 <label className="block text-sm text-dark-300 mb-2">
                   Server
@@ -5202,9 +5356,7 @@ function ProfileManager() {
                             }`}
                           />
                           <span
-                            className={`text-xs ${
-                              isOnline ? "text-success-500" : "text-error-500"
-                            }`}
+                            className={`text-xs ${isOnline ? "text-success-500" : "text-error-500"}`}
                           >
                             {isOnline ? "Online" : "Offline"}
                           </span>
@@ -5229,7 +5381,6 @@ function ProfileManager() {
                 >
                   <option value="">Select proxy option</option>
                   <option value="none">No Proxy (Direct Connection)</option>
-                  {/* Only show non-blacklisted proxies */}
                   {proxies
                     .filter((p) => !p.blacklisted)
                     .map((proxy) => (
@@ -5240,7 +5391,7 @@ function ProfileManager() {
                 </select>
               </div>
 
-              {/* Script Selection (Conditional) */}
+              {/* Script Selection */}
               {profileMode !== "manual" && (
                 <div>
                   <label className="block text-sm text-dark-300 mb-2">
@@ -5591,11 +5742,12 @@ export default Header;
 client/src/components/AccountVault.jsx
 
 import React, { useState, useEffect } from "react";
-import { Plus, User, Trash2, Eye, EyeOff } from "lucide-react";
+import { Plus, User, Trash2, Eye, EyeOff, Globe } from "lucide-react";
 import store from "../store/db";
 
 function AccountVault() {
   const [accounts, setAccounts] = useState([]);
+  const [proxies, setProxies] = useState([]); // NEW: State for proxies to enable assignment
   const [showAddModal, setShowAddModal] = useState(false);
   const [visiblePasswords, setVisiblePasswords] = useState({});
   const [newAccount, setNewAccount] = useState({
@@ -5606,16 +5758,23 @@ function AccountVault() {
     email: "",
     phone: "",
     notes: "",
+    assignedProxyId: null, // NEW: Field for proxy assignment
     status: "active",
   });
 
   useEffect(() => {
     loadAccounts();
+    loadProxies();
   }, []);
 
   const loadAccounts = async () => {
     const storedAccounts = (await store.get("accounts")) || [];
     setAccounts(storedAccounts);
+  };
+
+  const loadProxies = async () => {
+    const storedProxies = (await store.get("proxies")) || [];
+    setProxies(storedProxies);
   };
 
   const addAccount = async () => {
@@ -5640,6 +5799,7 @@ function AccountVault() {
       email: "",
       phone: "",
       notes: "",
+      assignedProxyId: null,
       status: "active",
     });
   };
@@ -5674,6 +5834,12 @@ function AccountVault() {
       ...prev,
       [accountId]: !prev[accountId],
     }));
+  };
+
+  const getProxyName = (proxyId) => {
+    if (!proxyId) return "None Assigned";
+    const proxy = proxies.find((p) => p.id === proxyId);
+    return proxy ? `${proxy.host}:${proxy.port}` : "Unknown Proxy";
   };
 
   return (
@@ -5769,6 +5935,18 @@ function AccountVault() {
                   </button>
                 </div>
               </div>
+
+              {/* NEW: Proxy Assignment Display */}
+              <div className="col-span-2">
+                <p className="text-dark-400">Assigned Proxy</p>
+                <div className="flex items-center space-x-2">
+                  <Globe className="w-4 h-4 text-dark-400" />
+                  <p className="text-white">
+                    {getProxyName(account.assignedProxyId)}
+                  </p>
+                </div>
+              </div>
+
               {account.notes && (
                 <div className="col-span-2">
                   <p className="text-dark-400">Notes</p>
@@ -5888,6 +6066,32 @@ function AccountVault() {
                 />
               </div>
 
+              {/* NEW: Proxy Selection in Modal */}
+              <div>
+                <label className="block text-sm text-dark-300 mb-2">
+                  Assign Proxy (optional)
+                </label>
+                <select
+                  className="input w-full"
+                  value={newAccount.assignedProxyId || ""}
+                  onChange={(e) =>
+                    setNewAccount({
+                      ...newAccount,
+                      assignedProxyId: e.target.value ? e.target.value : null,
+                    })
+                  }
+                >
+                  <option value="">No Proxy Assigned</option>
+                  {proxies
+                    .filter((p) => !p.blacklisted)
+                    .map((proxy) => (
+                      <option key={proxy.id} value={proxy.id}>
+                        {proxy.host}:{proxy.port} ({proxy.country || "N/A"})
+                      </option>
+                    ))}
+                </select>
+              </div>
+
               <div>
                 <label className="block text-sm text-dark-300 mb-2">
                   Notes (optional)
@@ -5972,7 +6176,8 @@ class BrowserFarmClient {
    */
   async getHealth(serverId) {
     const client = this.getClient(serverId);
-    const { data } = await client.get("/health");
+    // Use a short timeout for health checks to prevent UI freezing
+    const { data } = await client.get("/health", { timeout: 5000 });
     return data;
   }
 
@@ -6138,6 +6343,43 @@ class BrowserFarmClient {
   }
 
   // -----------------------------------------------------------
+  // Accounts & Proxy History
+  // -----------------------------------------------------------
+
+  async syncAccounts(serverId, accounts) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post("/accounts/sync", { accounts });
+    return data;
+  }
+
+  async getProxyHistory(serverId, accountId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.get(`/accounts/${accountId}/proxy-history`);
+    return data;
+  }
+
+  /**
+   * NEW: Record that an account is using a specific proxy for a specific website.
+   * Used for enforcing "1 Account per Website per Proxy" compliance.
+   */
+  async recordProxyHistory(serverId, accountId, proxyId, website) {
+    const client = this.getClient(serverId);
+    // Sending as query params or body depending on server implementation.
+    // Server expects query params based on the endpoint defined:
+    // @app.post("/history/record")
+    // async def record_proxy_history(account_id: str, proxy_id: str, website: str, ...)
+    // Note: FastAPI with query params needs them passed in the URL or config.
+    const { data } = await client.post(`/history/record`, null, {
+      params: {
+        account_id: accountId,
+        proxy_id: proxyId,
+        website: website,
+      },
+    });
+    return data;
+  }
+
+  // -----------------------------------------------------------
   // WebSocket URLs
   // -----------------------------------------------------------
 
@@ -6158,3 +6400,168 @@ class BrowserFarmClient {
 
 export const apiClient = new BrowserFarmClient();
 export default apiClient;
+
+client/public/preload.js
+
+const { contextBridge, ipcRenderer } = require("electron");
+
+// Expose protected methods that allow the renderer process to use
+// the ipcRenderer without exposing the entire object
+contextBridge.exposeInMainWorld("electronStore", {
+  get: (key) => ipcRenderer.invoke("store-get", key),
+  set: (key, value) => ipcRenderer.invoke("store-set", key, value),
+  delete: (key) => ipcRenderer.invoke("store-delete", key),
+  clear: () => ipcRenderer.invoke("store-clear"),
+  has: (key) => ipcRenderer.invoke("store-has", key),
+  getAll: () => ipcRenderer.invoke("store-get-all"),
+});
+
+contextBridge.exposeInMainWorld("electronAPI", {
+  getAppPath: () => ipcRenderer.invoke("get-app-path"),
+});
+
+client/public/index.html
+
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <link rel="icon" href="%PUBLIC_URL%/icon.png" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="theme-color" content="#0f172a" />
+        <meta
+            name="description"
+            content="Browser Farm - Distributed Browser Automation"
+        />
+        <link rel="apple-touch-icon" href="%PUBLIC_URL%/icon.png" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+            rel="stylesheet"
+        />
+        <title>Browser Farm</title>
+    </head>
+    <body>
+        <noscript>You need to enable JavaScript to run this app.</noscript>
+        <div id="root"></div>
+    </body>
+</html>
+
+client/public/electron.js
+
+const { app, BrowserWindow, ipcMain } = require("electron");
+const path = require("path");
+
+let Store;
+try {
+  Store = require("electron-store").default;
+} catch (e) {
+  Store = require("electron-store");
+}
+
+const isDev = process.argv.includes("--dev");
+
+// Disable sandbox on Linux for development
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("no-sandbox");
+}
+
+// Initialize electron-store
+const store = new Store({
+  defaults: {
+    servers: [],
+    proxies: [],
+    accounts: [],
+    profiles: [],
+    settings: {
+      homeScreenCount: 4,
+      homeScreens: [],
+    },
+  },
+});
+
+let mainWindow;
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    minWidth: 1200,
+    minHeight: 700,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
+      sandbox: false, // Disable sandbox
+    },
+    backgroundColor: "#0f172a",
+    show: false,
+    frame: true,
+    titleBarStyle: "default",
+  });
+
+  if (isDev) {
+    mainWindow.loadURL("http://localhost:3000");
+    mainWindow.webContents.openDevTools();
+  } else {
+    mainWindow.loadFile(path.join(__dirname, "index.html"));
+  }
+
+  mainWindow.once("ready-to-show", () => {
+    mainWindow.show();
+  });
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+}
+
+// IPC Handlers for Store
+ipcMain.handle("store-get", (event, key) => {
+  return store.get(key);
+});
+
+ipcMain.handle("store-set", (event, key, value) => {
+  store.set(key, value);
+  return true;
+});
+
+ipcMain.handle("store-delete", (event, key) => {
+  store.delete(key);
+  return true;
+});
+
+ipcMain.handle("store-clear", () => {
+  store.clear();
+  return true;
+});
+
+ipcMain.handle("store-has", (event, key) => {
+  return store.has(key);
+});
+
+ipcMain.handle("store-get-all", () => {
+  return store.store;
+});
+
+ipcMain.handle("get-app-path", () => {
+  return app.getPath("userData");
+});
+
+app.whenReady().then(createWindow);
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});
+
+app.on("activate", () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createWindow();
+  }
+});
+
+
+Okay okay so we fixed the 3 crashed state sure umm okay nice I think all others but here is the thing the Xvfb still ahngs and now what happended is when I clicked to start the profile the server disconnected while I am not sure it should have actually disconnected or did, so if you see

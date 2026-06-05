@@ -8,6 +8,7 @@ import {
   Trash2,
   Code,
   Circle,
+  Loader, // NEW: Added for Initializing state
 } from "lucide-react";
 import store from "../store/db";
 import { apiClient } from "../api/client";
@@ -37,80 +38,84 @@ function ProfileManager() {
     memoryThresholdMb: 400,
   });
 
-  // Load data initially AND when servers context updates (to allow syncing)
+  // --- DATA LOADING & SYNCING ---
+
+  // Load data initially AND when servers context updates
   useEffect(() => {
     loadData();
+
+    // NEW: Poll every 5 seconds to update status (e.g., Initializing -> Running)
+    // This ensures the UI reflects the background task completion.
+    const intervalId = setInterval(() => {
+      syncProfileStatuses();
+    }, 5000);
+
+    return () => clearInterval(intervalId);
   }, [servers]);
 
   const loadData = async () => {
-    // 1. Load Local Data
+    // 1. Load Local Data First (Optimistic UI)
     const localProfiles = (await store.get("profiles")) || [];
     setProxies((await store.get("proxies")) || []);
     setAccounts((await store.get("accounts")) || []);
     setScripts((await store.get("scripts")) || []);
 
-    // 2. Sync with Server (Crash Recovery / State Reconciliation)
-    // If the server restarted, profiles might be 'stopped' on server but 'running' locally.
-    // We merge server truth into local state.
+    // Set local profiles immediately
+    setProfiles(localProfiles);
 
-    // Create a mutable copy to update
-    let syncedProfiles = [...localProfiles];
+    // 2. Then sync with server in background
+    await syncProfileStatuses(localProfiles);
+  };
+
+  const syncProfileStatuses = async (currentProfiles = null) => {
+    const localProfiles =
+      currentProfiles || (await store.get("profiles")) || [];
+
+    if (!servers || servers.length === 0) return;
+
     let needsDbUpdate = false;
+    const updatedProfiles = [...localProfiles];
 
-    if (servers && servers.length > 0) {
-      for (const server of servers) {
-        try {
-          // Fetch profiles known by this server
-          const serverProfiles = await apiClient.listProfiles(server.id);
-          const serverMap = new Map(serverProfiles.map((p) => [p.id, p]));
+    for (const server of servers) {
+      // Only sync if server is online
+      if (healthData[server.id]?.status !== "online") continue;
 
-          // Update local profiles that belong to this server
-          syncedProfiles = syncedProfiles.map((p) => {
-            if (p.serverId === server.id) {
-              const serverVersion = serverMap.get(p.id);
-              // If server knows about it, take its status
-              if (serverVersion) {
-                if (p.status !== serverVersion.status) {
-                  needsDbUpdate = true;
-                  return { ...p, status: serverVersion.status };
-                }
-              } else {
-                // If server DOES NOT know about it (DB reset), mark as stopped or log warning.
-                // For now, we mark stopped so user can delete or restart.
-                if (p.status !== "stopped" && p.status !== "idle") {
-                  needsDbUpdate = true;
-                  return { ...p, status: "stopped" };
-                }
-              }
+      try {
+        const serverProfiles = await apiClient.listProfiles(server.id);
+        const serverMap = new Map(serverProfiles.map((p) => [p.id, p]));
+
+        updatedProfiles.forEach((p, index) => {
+          if (p.serverId === server.id && serverMap.has(p.id)) {
+            const serverVersion = serverMap.get(p.id);
+            // Update status if changed
+            if (p.status !== serverVersion.status) {
+              updatedProfiles[index] = { ...p, status: serverVersion.status };
+              needsDbUpdate = true;
             }
-            return p;
-          });
-        } catch (error) {
-          console.warn(
-            `Failed to sync profiles for server ${server.name}:`,
-            error,
-          );
-        }
+          }
+        });
+      } catch (error) {
+        console.warn(`Sync failed for server ${server.name}:`, error);
       }
     }
 
-    setProfiles(syncedProfiles);
     if (needsDbUpdate) {
-      await store.set("profiles", syncedProfiles);
+      setProfiles(updatedProfiles);
+      await store.set("profiles", updatedProfiles);
     }
   };
+
+  // --- ACTIONS ---
 
   const createProfile = async () => {
     try {
       const server = servers.find((s) => s.id === newProfile.serverId);
 
-      // Basic Server Validation
       if (!server) {
         alert("Please select a valid server.");
         return;
       }
 
-      // --- COMMAND CENTER VALIDATION ---
       if (profileMode === "command_center") {
         const existingCC = profiles.find((p) => p.mode === "command_center");
         if (existingCC) {
@@ -121,21 +126,17 @@ function ProfileManager() {
         }
       }
 
-      // --- PROXY VALIDATION (Optional Logic) ---
-      // If proxyId is "none" or empty, we treat it as null (No Proxy)
       const isNoProxy =
         newProfile.proxyId === "none" || newProfile.proxyId === "";
       const proxy = isNoProxy
         ? null
         : proxies.find((p) => p.id === newProfile.proxyId);
 
-      // If user selected something that isn't "none" but we couldn't find it, error
       if (!isNoProxy && !proxy) {
         alert("Invalid proxy selected.");
         return;
       }
 
-      // Script Validation (Only for Automated/CC modes)
       if (profileMode !== "manual" && selectedScriptIds.length === 0) {
         alert(
           "Please select at least one script for Automated/Command Center modes.",
@@ -143,13 +144,10 @@ function ProfileManager() {
         return;
       }
 
-      // 1. Prepare Scripts and Requirements
       const selectedScripts = scripts.filter((s) =>
         selectedScriptIds.includes(s.id),
       );
       const scriptCodes = selectedScripts.map((s) => s.code);
-
-      // Aggregate unique requirements
       const requirements = [
         ...new Set(selectedScripts.flatMap((s) => s.requirements || [])),
       ];
@@ -158,28 +156,26 @@ function ProfileManager() {
       const result = await apiClient.createProfile(server.id, {
         name: newProfile.name,
         mode: profileMode,
-        proxy_id: proxy ? proxy.id : null, // Send null if No Proxy
+        proxy_id: proxy ? proxy.id : null,
         user_agent: newProfile.userAgent || undefined,
         timezone: newProfile.timezone,
         locale: newProfile.locale,
-        scripts: scriptCodes, // Send array of code
-        requirements: requirements, // Send aggregated requirements
+        scripts: scriptCodes,
+        requirements: requirements,
         memory_threshold_mb: newProfile.memoryThresholdMb,
       });
 
-      // 3. Register proxy with server (Only if a proxy is selected)
       if (proxy) {
         await apiClient.registerProxy(server.id, proxy);
       }
 
-      // 4. Save locally
       const profile = {
         id: result.id,
         localId: `profile_${Date.now()}`,
         ...newProfile,
         mode: profileMode,
-        proxyId: proxy ? proxy.id : null, // Store null locally for clarity
-        scriptIds: selectedScriptIds, // Store IDs for reference
+        proxyId: proxy ? proxy.id : null,
+        scriptIds: selectedScriptIds,
         status: "idle",
         createdAt: new Date().toISOString(),
       };
@@ -190,7 +186,6 @@ function ProfileManager() {
 
       setShowAddModal(false);
       resetNewProfile();
-
       alert("Profile created successfully!");
     } catch (error) {
       console.error("Failed to create profile:", error);
@@ -215,23 +210,21 @@ function ProfileManager() {
 
   const startProfile = async (profile) => {
     try {
-      // Check if trying to start a second Command Center
       if (profile.mode === "command_center") {
         const runningCC = profiles.find(
           (p) =>
             p.mode === "command_center" &&
-            p.status === "running" &&
+            ["running", "initializing"].includes(p.status) &&
             p.id !== profile.id,
         );
         if (runningCC) {
           alert(
-            `Cannot start: Command Center "${runningCC.name}" is already running. Only one active CC allowed.`,
+            `Cannot start: Command Center "${runningCC.name}" is already active.`,
           );
           return;
         }
       }
 
-      // Get accounts for this profile
       const profileAccounts = {};
       profile.accountIds.forEach((accountId) => {
         const account = accounts.find((a) => a.id === accountId);
@@ -251,22 +244,28 @@ function ProfileManager() {
         profileAccounts,
       );
 
-      // Update local status
+      // Optimistic UI Update: Set to 'initializing' immediately
       const updatedProfiles = profiles.map((p) =>
-        p.id === profile.id ? { ...p, status: "running" } : p,
+        p.id === profile.id ? { ...p, status: "initializing" } : p,
       );
-      await store.set("profiles", updatedProfiles);
       setProfiles(updatedProfiles);
+      await store.set("profiles", updatedProfiles);
     } catch (error) {
       console.error("Failed to start profile:", error);
-      alert("Failed to start profile: " + error.message);
+      const errorMsg = error.response?.data?.detail || error.message;
+      alert("Failed to start profile: " + errorMsg);
+
+      // Revert to stopped on failure
+      const updatedProfiles = profiles.map((p) =>
+        p.id === profile.id ? { ...p, status: "stopped" } : p,
+      );
+      setProfiles(updatedProfiles);
     }
   };
 
   const pauseProfile = async (profile) => {
     try {
       await apiClient.pauseProfile(profile.serverId, profile.id);
-
       const updatedProfiles = profiles.map((p) =>
         p.id === profile.id ? { ...p, status: "paused" } : p,
       );
@@ -281,7 +280,6 @@ function ProfileManager() {
   const stopProfile = async (profile) => {
     try {
       await apiClient.stopProfile(profile.serverId, profile.id);
-
       const updatedProfiles = profiles.map((p) =>
         p.id === profile.id ? { ...p, status: "stopped" } : p,
       );
@@ -298,22 +296,20 @@ function ProfileManager() {
       return;
 
     try {
-      // Attempt to delete from server
       await apiClient.deleteProfile(profile.serverId, profile.id);
     } catch (error) {
       console.warn(
-        "Server delete failed (ghost profile or server missing):",
+        "Server delete failed (proceeding with local delete):",
         error,
       );
-      // We proceed to delete locally anyway. This allows cleanup of "ghost" profiles
-      // if the server was reset or the server ID is invalid.
     }
 
-    // Always remove from local store
     const updatedProfiles = profiles.filter((p) => p.id !== profile.id);
     await store.set("profiles", updatedProfiles);
     setProfiles(updatedProfiles);
   };
+
+  // --- HELPERS ---
 
   const getServerName = (serverId) => {
     const server = servers.find((s) => s.id === serverId);
@@ -333,8 +329,9 @@ function ProfileManager() {
       .join(", ");
   };
 
-  // Check if a Command Center already exists to disable option
   const commandCenterExists = profiles.some((p) => p.mode === "command_center");
+
+  // --- RENDER ---
 
   return (
     <div>
@@ -389,13 +386,20 @@ function ProfileManager() {
               </div>
 
               <div className="flex items-center space-x-3">
-                <span className={`status-badge status-${profile.status}`}>
+                <span
+                  className={`status-badge status-${profile.status === "initializing" ? "idle" : profile.status}`}
+                >
                   {profile.status}
                 </span>
 
-                {profile.status === "idle" ||
-                profile.status === "stopped" ||
-                profile.status === "crashed" ? (
+                {/* ACTION BUTTONS */}
+                {profile.status === "initializing" ? (
+                  <button className="btn btn-secondary" disabled>
+                    <Loader className="w-4 h-4 animate-spin" />
+                  </button>
+                ) : profile.status === "idle" ||
+                  profile.status === "stopped" ||
+                  profile.status === "crashed" ? (
                   <button
                     onClick={() => startProfile(profile)}
                     className="btn btn-success"
@@ -515,7 +519,7 @@ function ProfileManager() {
                 )}
               </div>
 
-              {/* Server Selection (Updated UI with Status) */}
+              {/* Server Selection */}
               <div>
                 <label className="block text-sm text-dark-300 mb-2">
                   Server
@@ -558,9 +562,7 @@ function ProfileManager() {
                             }`}
                           />
                           <span
-                            className={`text-xs ${
-                              isOnline ? "text-success-500" : "text-error-500"
-                            }`}
+                            className={`text-xs ${isOnline ? "text-success-500" : "text-error-500"}`}
                           >
                             {isOnline ? "Online" : "Offline"}
                           </span>
@@ -585,7 +587,6 @@ function ProfileManager() {
                 >
                   <option value="">Select proxy option</option>
                   <option value="none">No Proxy (Direct Connection)</option>
-                  {/* Only show non-blacklisted proxies */}
                   {proxies
                     .filter((p) => !p.blacklisted)
                     .map((proxy) => (
@@ -596,7 +597,7 @@ function ProfileManager() {
                 </select>
               </div>
 
-              {/* Script Selection (Conditional) */}
+              {/* Script Selection */}
               {profileMode !== "manual" && (
                 <div>
                   <label className="block text-sm text-dark-300 mb-2">

@@ -1,6 +1,6 @@
+import asyncio
 import subprocess
 import os
-import time
 import logging
 from typing import Dict, Tuple, Optional
 
@@ -20,25 +20,24 @@ class XvfbManager:
         self.resolution = resolution
 
         # Global/Legacy process (kept for backwards compatibility or server-wide needs)
-        self.process: Optional[subprocess.Popen] = None
+        self.process: Optional[asyncio.subprocess.Process] = None
         self.display: str = f":{base_display}"
 
         # Per-Profile Management
         # Structure: { profile_id: (process_handle, display_number) }
-        # FIXED: Renamed from managed_displays to active_displays to match server.py
-        self.active_displays: Dict[str, Tuple[subprocess.Popen, int]] = {}
+        self.active_displays: Dict[str, Tuple[asyncio.subprocess.Process, int]] = {}
 
         # Track used display numbers to find available slots quickly
         self._used_display_numbers: set = set()
 
     # ==========================================
-    # Legacy Global Methods (Preserved)
+    # Legacy Global Methods (Async Compatible)
     # ==========================================
 
-    def start(self):
+    async def start(self):
         """Start the default global Xvfb virtual display (Legacy/Default)"""
         try:
-            if self._is_running(self.display):
+            if await self._is_running(self.display):
                 logger.info(f"Xvfb already running on {self.display}")
                 os.environ["DISPLAY"] = self.display
                 return
@@ -53,16 +52,18 @@ class XvfbManager:
                 "-noreset"
             ]
 
-            self.process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+            # Use asyncio subprocess
+            self.process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
             )
 
-            time.sleep(2)  # Wait for Xvfb to be ready
+            # Wait for Xvfb to be ready
+            await asyncio.sleep(2)
 
             # Verify it started
-            if not self._is_running(self.display):
+            if not await self._is_running(self.display):
                  raise RuntimeError(f"Failed to start global Xvfb on {self.display}")
 
             os.environ["DISPLAY"] = self.display
@@ -73,14 +74,16 @@ class XvfbManager:
             logger.error(f"Failed to start Xvfb: {e}")
             raise
 
-    def stop(self):
+    async def stop(self):
         """Stop the global Xvfb instance"""
         if self.process:
-            self.process.terminate()
             try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
+                self.process.terminate()
+                await asyncio.wait_for(self.process.wait(), timeout=5)
+            except asyncio.TimeoutError:
                 self.process.kill()
+            except ProcessLookupError:
+                pass
 
             if self.base_display in self._used_display_numbers:
                 self._used_display_numbers.remove(self.base_display)
@@ -88,12 +91,12 @@ class XvfbManager:
             logger.info("Global Xvfb stopped")
 
     # ==========================================
-    # Per-Profile Methods (New)
+    # Per-Profile Methods (Async Non-Blocking)
     # ==========================================
 
-    def start_display(self, profile_id: str) -> str:
+    async def start_display(self, profile_id: str) -> str:
         """
-        Starts a dedicated Xvfb display for a specific profile.
+        Starts a dedicated Xvfb display for a specific profile ASYNCHRONOUSLY.
         This allows concurrent PyAutoGUI usage across multiple profiles.
 
         Args:
@@ -116,18 +119,35 @@ class XvfbManager:
         try:
             logger.info(f"Allocating display {display_str} for profile {profile_id}...")
 
-            # --- NEW: CLEANUP STALE LOCK FILES ---
-            # This fixes the "Xvfb failed to start" error caused by leftover lock files
+            # --- CRITICAL FIX: Aggressive Cleanup ---
+            # 1. Remove lock file
             lock_file = f"/tmp/.X{display_num}-lock"
             if os.path.exists(lock_file):
                 logger.warning(f"Removing stale Xvfb lock file: {lock_file}")
                 try:
-                    os.remove(lock_file)
+                    # Run os.remove in executor to prevent blocking loop
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, os.remove, lock_file)
                 except OSError as e:
                     logger.error(f"Failed to remove lock file: {e}")
+
+            # 2. Kill any zombie process holding this display
+            # We use pkill to ensure the port is free before we try to bind.
+            try:
+                # The '|| true' ensures the command doesn't throw error if no process found
+                kill_cmd = f"pkill -f 'Xvfb {display_str}' || true"
+                kill_proc = await asyncio.create_subprocess_shell(
+                    kill_cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL
+                )
+                await kill_proc.wait()
+                logger.info(f"Killed any existing zombie processes for {display_str}")
+            except Exception as e:
+                logger.warning(f"Cleanup kill failed (safe to ignore): {e}")
             # -------------------------------------
 
-            # 3. Launch Xvfb
+            # 3. Launch Xvfb (Async)
             cmd = [
                 "Xvfb",
                 display_str,
@@ -138,22 +158,43 @@ class XvfbManager:
                 "-noreset"
             ]
 
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE # Capture stderr to debug if it fails
+            # Redirect stderr to PIPE so we can capture WHY it fails if it crashes immediately
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE
             )
 
-            # 4. Wait and verify
-            time.sleep(1)
-            if not self._is_running(display_str):
-                # Try to read stderr if available
-                stderr_output = ""
-                try:
-                    stderr_output = proc.stderr.read().decode()
-                except:
-                    pass
-                raise RuntimeError(f"Xvfb failed to start on {display_str}. Stderr: {stderr_output}")
+            # 4. Wait and verify (Non-Blocking Poll)
+            # Wait up to 5 seconds for display to be ready
+            start_time = asyncio.get_event_loop().time()
+            while True:
+                if await self._is_running(display_str):
+                    break
+
+                if asyncio.get_event_loop().time() - start_time > 5:
+                    # Timeout occurred
+                    err_output = b""
+                    # Try to read stderr to understand why it failed
+                    if proc.stderr:
+                        try:
+                            # Read available error output
+                            err_output = await asyncio.wait_for(proc.stderr.read(), timeout=0.5)
+                        except: pass
+
+                    # Kill the failed process
+                    try:
+                        proc.kill()
+                        await proc.wait()
+                    except: pass
+
+                    err_msg = err_output.decode().strip() if err_output else "Unknown error (process exited or hung)"
+                    raise RuntimeError(
+                        f"Xvfb failed to start on {display_str} within 5s. "
+                        f"Stderr: {err_msg}"
+                    )
+
+                await asyncio.sleep(0.2)
 
             # 5. Register
             self.active_displays[profile_id] = (proc, display_num)
@@ -169,7 +210,7 @@ class XvfbManager:
                 self._used_display_numbers.remove(display_num)
             raise
 
-    def stop_display(self, profile_id: str):
+    async def stop_display(self, profile_id: str):
         """
         Stops the Xvfb display associated with a specific profile.
         """
@@ -182,9 +223,11 @@ class XvfbManager:
 
         try:
             proc.terminate()
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
             proc.kill()
+        except ProcessLookupError:
+            pass
         except Exception as e:
             logger.error(f"Error stopping display for {profile_id}: {e}")
         finally:
@@ -204,36 +247,36 @@ class XvfbManager:
         candidate = self.base_display + 1
         while True:
             if candidate not in self._used_display_numbers:
-                # Double check it's not used by an external process
-                if not self._is_running(f":{candidate}"):
-                    return candidate
+                # Note: We skip the _is_running check here to keep this sync/fast
+                # The start_display will handle conflicts via lock file cleanup
+                return candidate
             candidate += 1
             # Safety break to prevent infinite loops in extreme cases
             if candidate > self.base_display + 1000:
                 raise RuntimeError("Could not find an available display number")
 
-    def _is_running(self, display: str) -> bool:
-        """Check if Xvfb is running on a specific display"""
+    async def _is_running(self, display: str) -> bool:
+        """Check if Xvfb is running on a specific display ASYNCHRONOUSLY"""
         try:
-            subprocess.run(
-                ["xdpyinfo", "-display", display],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-                timeout=2
+            # xdpyinfo is used to verify the X server is accepting connections
+            proc = await asyncio.create_subprocess_exec(
+                "xdpyinfo", "-display", display,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
             )
-            return True
-        except:
+            await proc.communicate()
+            return proc.returncode == 0
+        except Exception:
             return False
 
-    def stop_all(self):
+    async def stop_all(self):
         """Stops all managed displays and the global instance."""
         # Stop all profile-specific displays
         # Convert to list to avoid modification during iteration
         for profile_id in list(self.active_displays.keys()):
-            self.stop_display(profile_id)
+            await self.stop_display(profile_id)
 
         # Stop global
-        self.stop()
+        await self.stop()
 
         logger.info("All Xvfb instances stopped.")

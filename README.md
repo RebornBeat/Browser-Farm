@@ -5,9 +5,10 @@ A distributed browser automation platform for developers. Manage multiple browse
 ## Features
 
 - 🖥️ **Multi-Server Management** - Connect and manage multiple automation servers
-- 🗄️ **Persistent Storage** - PostgreSQL database backing for profiles, ensuring state survives restarts
+- 🗄️ **Persistent Storage** - PostgreSQL database backing for profiles, accounts, and proxies, ensuring state survives restarts
 - 🌐 **Proxy Management** - Global proxy pool with per-site blacklisting
-- 👤 **Account Vault** - Centralized credential management for automation
+- 👤 **Account Vault** - Centralized credential management with Proxy Assignment support
+- 🔗 **Proxy History Tracking** - Enforce "1 Account per Website per Proxy" compliance automatically
 - 🤖 **Flexible Profile Modes** - Manual, Automated, or Command Center (Orchestrator) profiles
 - 📚 **Script Library** - Centralized database for modular, reusable scripts
 - 🔗 **Script Chaining** - Execute multiple scripts in sequence within a single profile
@@ -20,6 +21,7 @@ A distributed browser automation platform for developers. Manage multiple browse
 - 📸 **Screenshots & Videos** - Automatic capture and gallery viewing
 - 📊 **Resource Monitoring** - Non-blocking memory, CPU, and network metrics per context
 - 🔄 **Auto-Dependency Install** - Scripts can define requirements installed at runtime
+- 🚑 **Crash Recovery** - Automatic detection and state reconciliation of ghost profiles on server restart
 
 ## Architecture
 
@@ -368,5 +370,6 @@ MIT License - see [LICENSE](./LICENSE)
 - [x] Inter-Profile Communication
 - [x] PyAutoGUI Support
 - [x] PostgreSQL Persistence
+- [x] Proxy History Tracking
 - [ ] Docker support
 - [ ] LLM Orchestrator Integration

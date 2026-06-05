@@ -6,6 +6,7 @@ from enum import Enum
 
 class ProfileStatus(str, Enum):
     IDLE = "idle"
+    INITIALIZING = "initializing"  # ADDED: Required for background startup
     RUNNING = "running"
     PAUSED = "paused"
     STOPPED = "stopped"
