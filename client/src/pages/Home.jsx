@@ -1,58 +1,104 @@
-import React, { useState, useEffect } from "react";
-import { Settings } from "lucide-react";
+import React, { useState, useEffect, useCallback } from "react";
+import { Settings, MonitorPlay, X } from "lucide-react";
 import LiveScreenGrid from "../components/LiveScreenGrid";
 import store from "../store/db";
+import { useServerHealth } from "../context/ServerHealthContext";
+import { apiClient } from "../api/client";
 
 function Home() {
+  const { servers, healthData } = useServerHealth();
   const [screens, setScreens] = useState([]);
-  const [screenCount, setScreenCount] = useState(4);
   const [showSettings, setShowSettings] = useState(false);
-  const [profiles, setProfiles] = useState([]);
+  const [availableProfiles, setAvailableProfiles] = useState([]);
+  const [selectedProfileIds, setSelectedProfileIds] = useState([]);
+
+  // 1. Load, Sync, and Auto-Populate Logic
+  const loadAndSync = useCallback(async () => {
+    const settings = (await store.get("settings")) || {};
+    let currentScreens = settings.homeScreens || [];
+    const localProfiles = (await store.get("profiles")) || [];
+
+    // Build list of RUNNING profiles from all connected servers
+    const runningProfiles = [];
+
+    for (const server of servers) {
+      // Only query online servers
+      if (healthData[server.id]?.status !== "online") continue;
+
+      try {
+        const serverProfiles = await apiClient.listProfiles(server.id);
+        serverProfiles.forEach((p) => {
+          if (p.status === "running") {
+            // Merge with local data to get friendly name
+            const local = localProfiles.find((lp) => lp.id === p.id);
+            runningProfiles.push({
+              id: p.id,
+              serverId: server.id,
+              name: local?.name || p.id,
+            });
+          }
+        });
+      } catch (e) {
+        console.warn(`Failed to sync profiles for server ${server.name}`);
+      }
+    }
+
+    setAvailableProfiles(runningProfiles);
+
+    // AUTO-POPULATE LOGIC
+    // If screens are empty, fill with first 4 running profiles found
+    if (currentScreens.length === 0 && runningProfiles.length > 0) {
+      currentScreens = runningProfiles.slice(0, 4).map((p) => ({
+        serverId: p.serverId,
+        profileId: p.id,
+        profileName: p.name,
+      }));
+
+      // Save to store immediately so it persists
+      await store.set("settings", { ...settings, homeScreens: currentScreens });
+    }
+
+    setScreens(currentScreens);
+
+    // Update selection state for the modal
+    setSelectedProfileIds(currentScreens.map((s) => s.profileId));
+  }, [servers, healthData]);
 
   useEffect(() => {
-    loadSettings();
-    loadProfiles();
-  }, []);
+    loadAndSync();
+    // Refresh every 15 seconds to catch new profiles
+    const interval = setInterval(loadAndSync, 15000);
+    return () => clearInterval(interval);
+  }, [loadAndSync]);
 
-  const loadSettings = async () => {
-    const settings = (await store.get("settings")) || {};
-    setScreenCount(settings.homeScreenCount || 4);
-    setScreens(settings.homeScreens || []);
-  };
-
-  const loadProfiles = async () => {
-    const storedProfiles = (await store.get("profiles")) || [];
-    setProfiles(storedProfiles.filter((p) => p.status === "running"));
+  // 2. Modal Actions
+  const handleToggleProfile = (profile) => {
+    const exists = selectedProfileIds.includes(profile.id);
+    if (exists) {
+      setSelectedProfileIds((prev) => prev.filter((id) => id !== profile.id));
+    } else {
+      if (selectedProfileIds.length >= 12) {
+        alert("Maximum 12 screens allowed.");
+        return;
+      }
+      setSelectedProfileIds((prev) => [...prev, profile.id]);
+    }
   };
 
   const saveSettings = async () => {
+    const newScreens = availableProfiles
+      .filter((p) => selectedProfileIds.includes(p.id))
+      .map((p) => ({
+        serverId: p.serverId,
+        profileId: p.id,
+        profileName: p.name,
+      }));
+
     const settings = (await store.get("settings")) || {};
-    settings.homeScreenCount = screenCount;
-    settings.homeScreens = screens;
-    await store.set("settings", settings);
+    await store.set("settings", { ...settings, homeScreens: newScreens });
+    setScreens(newScreens);
     setShowSettings(false);
   };
-
-  const addScreen = (profileId) => {
-    const profile = profiles.find((p) => p.id === profileId);
-    if (!profile || screens.some((s) => s.profileId === profileId)) return;
-
-    const newScreen = {
-      serverId: profile.serverId,
-      profileId: profile.id,
-      profileName: profile.name,
-    };
-
-    const updatedScreens = [...screens, newScreen];
-    setScreens(updatedScreens);
-  };
-
-  const removeScreen = (profileId) => {
-    const updatedScreens = screens.filter((s) => s.profileId !== profileId);
-    setScreens(updatedScreens);
-  };
-
-  const hasEnoughProfiles = profiles.length >= screenCount;
 
   return (
     <div className="animate-fade-in">
@@ -71,115 +117,80 @@ function Home() {
         </button>
       </div>
 
-      {screens.length === 0 ? (
-        <div className="card text-center py-16">
-          <h3 className="text-xl font-semibold text-white mb-2">
-            No screens configured
-          </h3>
-          <p className="text-dark-400 mb-6">
-            {profiles.length === 0
-              ? "Launch a profile to view live screens"
-              : 'Click "Configure Screens" to select which profiles to display'}
-          </p>
-          {profiles.length > 0 && (
-            <button
-              onClick={() => setShowSettings(true)}
-              className="btn btn-primary"
-            >
-              Configure Screens
-            </button>
-          )}
-        </div>
-      ) : (
-        <LiveScreenGrid screens={screens} />
-      )}
+      {/* Render Grid - Component handles the 4-slot logic */}
+      <LiveScreenGrid screens={screens} onRefresh={loadAndSync} />
 
-      {/* Settings Modal */}
+      {/* Settings Modal - Updated UI */}
       {showSettings && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-dark-800 rounded-lg p-6 w-full max-w-2xl">
-            <h3 className="text-xl font-bold text-white mb-4">
-              Configure Home Screens
-            </h3>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-dark-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] flex flex-col border border-dark-700 shadow-xl">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold text-white">
+                Configure Screens
+              </h3>
+              <button
+                onClick={() => setShowSettings(false)}
+                className="text-dark-400 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-            <div className="space-y-6">
-              <div>
-                <label className="block text-sm text-dark-300 mb-2">
-                  Number of screens to display (minimum 4)
-                </label>
-                <input
-                  type="number"
-                  min="4"
-                  max="12"
-                  className="input w-full"
-                  value={screenCount}
-                  onChange={(e) => setScreenCount(parseInt(e.target.value))}
-                />
-              </div>
+            <div className="mb-4 text-sm text-dark-400 border-b border-dark-700 pb-3">
+              <span className="text-white font-medium">
+                {selectedProfileIds.length}
+              </span>{" "}
+              screens selected (Min 4 recommended)
+            </div>
 
-              <div>
-                <label className="block text-sm text-dark-300 mb-2">
-                  Select profiles to display ({screens.length}/{screenCount})
-                </label>
-
-                {profiles.length === 0 ? (
-                  <p className="text-dark-500 text-sm">
-                    No running profiles available
+            <div className="flex-1 overflow-y-auto space-y-2 pr-2">
+              {availableProfiles.length === 0 ? (
+                <div className="text-center text-dark-500 py-12 bg-dark-900 rounded-lg mt-2">
+                  <MonitorPlay className="w-8 h-8 mx-auto mb-3 opacity-50" />
+                  No running profiles found.
+                  <p className="text-xs mt-1">
+                    Start a profile from the Profiles tab.
                   </p>
-                ) : (
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {profiles.map((profile) => {
-                      const isSelected = screens.some(
-                        (s) => s.profileId === profile.id,
-                      );
-                      const canAdd = screens.length < screenCount;
-
-                      return (
-                        <div
-                          key={profile.id}
-                          className="flex items-center justify-between p-3 bg-dark-900 rounded-lg"
-                        >
-                          <div>
-                            <p className="text-white font-medium">
-                              {profile.name}
-                            </p>
-                            <p className="text-sm text-dark-400">
-                              {profile.id}
-                            </p>
-                          </div>
-
-                          {isSelected ? (
-                            <button
-                              onClick={() => removeScreen(profile.id)}
-                              className="btn btn-error btn-sm"
-                            >
-                              Remove
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => addScreen(profile.id)}
-                              className="btn btn-primary btn-sm"
-                              disabled={!canAdd}
-                            >
-                              {canAdd ? "Add" : "Full"}
-                            </button>
-                          )}
+                </div>
+              ) : (
+                availableProfiles.map((profile) => {
+                  const isSelected = selectedProfileIds.includes(profile.id);
+                  return (
+                    <div
+                      key={profile.id}
+                      onClick={() => handleToggleProfile(profile)}
+                      className={`p-3 rounded-lg flex items-center justify-between cursor-pointer transition-all border ${
+                        isSelected
+                          ? "bg-primary-900/30 border-primary-500"
+                          : "bg-dark-900 border-transparent hover:border-dark-600"
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <MonitorPlay
+                          className={`w-5 h-5 ${
+                            isSelected ? "text-primary-400" : "text-dark-500"
+                          }`}
+                        />
+                        <div>
+                          <p className="text-white font-medium">
+                            {profile.name}
+                          </p>
+                          <p className="text-xs text-dark-400">{profile.id}</p>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {screens.length < screenCount && profiles.length > 0 && (
-                <p className="text-sm text-warning-500">
-                  ⚠️ You have fewer screens selected than the minimum (
-                  {screens.length}/{screenCount})
-                </p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => {}}
+                        className="h-5 w-5 rounded border-dark-500 text-primary-600 focus:ring-primary-500 cursor-pointer bg-dark-700"
+                      />
+                    </div>
+                  );
+                })
               )}
             </div>
 
-            <div className="flex space-x-3 mt-6">
+            <div className="flex space-x-3 mt-6 pt-4 border-t border-dark-700">
               <button
                 onClick={() => setShowSettings(false)}
                 className="btn btn-secondary flex-1"
@@ -187,7 +198,7 @@ function Home() {
                 Cancel
               </button>
               <button onClick={saveSettings} className="btn btn-primary flex-1">
-                Save
+                Save Layout
               </button>
             </div>
           </div>

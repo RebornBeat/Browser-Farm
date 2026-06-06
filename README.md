@@ -48,7 +48,7 @@ Your Custom Scripts (Playwright + PyAutoGUI)
 
 ```bash
 sudo apt update
-sudo apt install -y python3.10-venv python3-pip xvfb chromium-browser postgresql postgresql-contrib libpq-dev
+sudo apt install -y python3.10-venv python3-pip xvfb chromium-browser postgresql postgresql-contrib libpq-dev x11-utils
 ```
 
 ### Step 2: Database Setup

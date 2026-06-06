@@ -1,70 +1,84 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Maximize2, Pause, Play, Square } from "lucide-react";
+import { Maximize2, AlertTriangle, Loader } from "lucide-react";
 import { apiClient } from "../api/client";
 
 function LiveScreenCard({ serverId, profileId, profileName, onExpand }) {
   const [imageUrl, setImageUrl] = useState(null);
-  const [status, setStatus] = useState("idle");
-  const wsRef = useRef(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [hasError, setHasError] = useState(false);
   const intervalRef = useRef(null);
 
   useEffect(() => {
-    startStreaming();
-    return () => stopStreaming();
+    fetchScreenshot();
+    // Poll every 2 seconds for updates
+    intervalRef.current = setInterval(fetchScreenshot, 2000);
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
   }, [serverId, profileId]);
 
-  const startStreaming = () => {
-    // Use periodic screenshots instead of WebSocket for simplicity
-    intervalRef.current = setInterval(async () => {
-      try {
-        const url = await apiClient.getScreenshot(serverId, profileId);
-        setImageUrl(url);
-      } catch (error) {
-        console.error("Failed to fetch screenshot:", error);
+  const fetchScreenshot = async () => {
+    try {
+      // Revoke old URL to prevent memory leaks
+      if (imageUrl && imageUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(imageUrl);
       }
-    }, 1000); // Update every second
-  };
 
-  const stopStreaming = () => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
+      const url = await apiClient.getScreenshot(serverId, profileId);
+      setImageUrl(url);
+      setHasError(false);
+      setIsLoading(false);
+    } catch (error) {
+      console.error("Screenshot fetch failed:", error);
+      setHasError(true);
+      setIsLoading(false);
     }
   };
 
   return (
-    <div className="card group relative overflow-hidden">
+    <div className="card group relative overflow-hidden flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h3 className="text-sm font-medium text-white">{profileName}</h3>
-          <p className="text-xs text-dark-400">Profile ID: {profileId}</p>
-        </div>
-        <div className="flex items-center space-x-2">
-          <span className={`status-badge status-${status}`}>{status}</span>
-          <button
-            onClick={onExpand}
-            className="p-1 text-dark-400 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
-          >
-            <Maximize2 className="w-4 h-4" />
-          </button>
-        </div>
+      <div className="flex items-center justify-between mb-2 px-1">
+        <h3 className="text-sm font-medium text-white truncate">
+          {profileName}
+        </h3>
+        <button
+          onClick={onExpand}
+          className="p-1 text-dark-400 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
+          title="Open Full Monitor"
+        >
+          <Maximize2 className="w-4 h-4" />
+        </button>
       </div>
 
-      {/* Screen */}
-      <div className="relative aspect-video bg-dark-900 rounded-lg overflow-hidden">
-        {imageUrl ? (
+      {/* Screen Area */}
+      <div className="relative flex-1 bg-dark-900 rounded-lg overflow-hidden border border-dark-700 min-h-[200px]">
+        {/* Loading State */}
+        {isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-dark-800 z-10">
+            <Loader className="w-6 h-6 text-primary-500 animate-spin" />
+          </div>
+        )}
+
+        {/* Error State */}
+        {hasError && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-dark-900 p-4 z-10">
+            <AlertTriangle className="w-8 h-8 text-error-500 mb-2" />
+            <p className="text-xs text-dark-400 text-center">
+              Connection Failed
+            </p>
+          </div>
+        )}
+
+        {/* Success State */}
+        {!isLoading && !hasError && imageUrl && (
           <img
             src={imageUrl}
             alt="Live screen"
             className="w-full h-full object-contain"
+            onError={() => setHasError(true)} // Handle image decoding errors
           />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <div className="text-center">
-              <div className="animate-spin w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-              <p className="text-sm text-dark-400">Loading...</p>
-            </div>
-          </div>
         )}
       </div>
     </div>

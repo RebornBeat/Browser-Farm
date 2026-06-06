@@ -2,90 +2,211 @@ import React, { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
+  Camera,
+  Video,
+  Loader,
   Download,
+  Cpu,
+  HardDrive,
+  RefreshCw,
+  ArrowLeftCircle,
+  Globe,
+  X,
   Play,
-  Pause,
   Square,
-  Maximize2,
+  MousePointer,
 } from "lucide-react";
 import { apiClient } from "../api/client";
+import { useServerHealth } from "../context/ServerHealthContext";
 import store from "../store/db";
 
 function Monitoring() {
   const { profileId } = useParams();
   const navigate = useNavigate();
+  const { servers, healthData } = useServerHealth();
+
+  // --- Core State ---
   const [profile, setProfile] = useState(null);
+  const [server, setServer] = useState(null);
+  const [isLoadingMeta, setIsLoadingMeta] = useState(true);
+
+  // --- View State ---
   const [screenshot, setScreenshot] = useState(null);
   const [screenshots, setScreenshots] = useState([]);
-  const [logs, setLogs] = useState([]);
+  const [videos, setVideos] = useState([]);
   const [metrics, setMetrics] = useState(null);
+
+  // --- Navigation State ---
+  const [urlInput, setUrlInput] = useState("");
+
+  // --- Control State ---
   const [manualControl, setManualControl] = useState(false);
-  const wsRef = useRef(null);
   const controlWsRef = useRef(null);
   const canvasRef = useRef(null);
 
-  useEffect(() => {
-    loadProfile();
-    const interval = setInterval(loadData, 2000);
-    return () => clearInterval(interval);
-  }, [profileId]);
+  // --- Media Modal State ---
+  const [viewingImage, setViewingImage] = useState(null);
+  const [playingVideo, setPlayingVideo] = useState(null);
 
+  // 1. Initialization: Find Profile and Server
   useEffect(() => {
-    if (manualControl) {
+    const init = async () => {
+      if (!profileId || servers.length === 0) return;
+
+      let foundProfile = null;
+      let foundServer = null;
+
+      // Strategy: Check local store first (fastest)
+      const localProfiles = (await store.get("profiles")) || [];
+      const localP = localProfiles.find((p) => p.id === profileId);
+
+      if (localP) {
+        const s = servers.find((srv) => srv.id === localP.serverId);
+        if (s) {
+          foundProfile = localP;
+          foundServer = s;
+        }
+      }
+
+      // Fallback: Iterate servers if not found locally (e.g., deep link)
+      if (!foundProfile) {
+        for (const s of servers) {
+          if (healthData[s.id]?.status !== "online") continue;
+          try {
+            const data = await apiClient.getProfile(s.id, profileId);
+            if (data) {
+              foundProfile = data;
+              foundServer = s;
+              break;
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+      }
+
+      if (!foundProfile || !foundServer) {
+        setIsLoadingMeta(false);
+        return;
+      }
+
+      setProfile(foundProfile);
+      setServer(foundServer);
+      setIsLoadingMeta(false);
+    };
+
+    init();
+  }, [profileId, servers, healthData]);
+
+  // 2. Data Polling
+  useEffect(() => {
+    if (!server || !profile || profile.status !== "running") return;
+
+    const interval = setInterval(() => {
+      loadCurrentScreenshot();
+      loadMetrics();
+      loadMedia();
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [server, profile]);
+
+  // 3. Manual Control WebSocket Lifecycle
+  useEffect(() => {
+    if (manualControl && server && profile) {
       startManualControl();
     } else {
       stopManualControl();
     }
+    // Cleanup on unmount
     return () => stopManualControl();
-  }, [manualControl]);
+  }, [manualControl, server, profile]);
 
-  const loadProfile = () => {
-    const profiles = store.get("profiles") || [];
-    const p = profiles.find((p) => p.id === profileId);
-    setProfile(p);
-  };
+  // --- Data Loaders ---
 
-  const loadData = async () => {
-    if (!profile) return;
-
+  const loadCurrentScreenshot = async () => {
+    if (!server || !profile) return;
     try {
-      // Load screenshot
-      const screenshotUrl = await apiClient.getScreenshot(
-        profile.serverId,
-        profile.id,
-      );
-      setScreenshot(screenshotUrl);
-
-      // Load metrics
-      const metricsData = await apiClient.getMetrics(
-        profile.serverId,
-        profile.id,
-      );
-      setMetrics(metricsData);
-
-      // Load screenshots list
-      const screenshotsList = await apiClient.listScreenshots(
-        profile.serverId,
-        profile.id,
-      );
-      setScreenshots(screenshotsList);
-    } catch (error) {
-      console.error("Failed to load data:", error);
+      const url = await apiClient.getScreenshot(server.id, profile.id);
+      setScreenshot(url);
+    } catch (e) {
+      // Silent fail for polling
     }
   };
 
+  const loadMetrics = async () => {
+    if (!server || !profile) return;
+    try {
+      const data = await apiClient.getMetrics(server.id, profile.id);
+      setMetrics(data);
+    } catch (e) {}
+  };
+
+  const loadMedia = async () => {
+    if (!server || !profile) return;
+    try {
+      const ss = await apiClient.listScreenshots(server.id, profile.id);
+      setScreenshots(ss);
+      const vids = await apiClient.listVideos(server.id, profile.id);
+      setVideos(vids);
+    } catch (e) {}
+  };
+
+  // --- Navigation Actions ---
+
+  const handleNavigate = async (e) => {
+    if (e) e.preventDefault();
+    if (!server || !profile || !urlInput) return;
+    try {
+      let url = urlInput;
+      // Auto-prefix protocol
+      if (!url.startsWith("http://") && !url.startsWith("https://")) {
+        url = "https://" + url;
+      }
+      await apiClient.navigateTo(server.id, profile.id, url);
+      setUrlInput(url); // Update with normalized URL
+    } catch (err) {
+      alert("Navigation failed: " + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  const handleRefresh = async () => {
+    if (!server || !profile) return;
+    try {
+      await apiClient.refreshPage(server.id, profile.id);
+    } catch (err) {}
+  };
+
+  const handleBack = async () => {
+    if (!server || !profile) return;
+    try {
+      await apiClient.goBack(server.id, profile.id);
+    } catch (err) {}
+  };
+
+  const takeScreenshot = async () => {
+    if (!server || !profile) return;
+    try {
+      await apiClient.takeScreenshot(server.id, profile.id);
+      loadMedia(); // Refresh list
+    } catch (error) {
+      alert("Failed to take screenshot: " + error.message);
+    }
+  };
+
+  // --- Manual Control Logic ---
+
   const startManualControl = () => {
-    if (!profile) return;
+    if (!server || !profile) return;
+    const wsUrl = apiClient.getControlUrl(server.id, profile.id);
+    if (!wsUrl) return;
 
-    const url = apiClient.getControlUrl(profile.serverId, profile.id);
-    controlWsRef.current = new WebSocket(url);
-
+    controlWsRef.current = new WebSocket(wsUrl);
     controlWsRef.current.onopen = () => {
       console.log("Manual control connected");
     };
-
-    controlWsRef.current.onerror = (error) => {
-      console.error("Control WebSocket error:", error);
+    controlWsRef.current.onerror = (err) => {
+      console.error("Control error", err);
       setManualControl(false);
     };
   };
@@ -98,186 +219,213 @@ function Monitoring() {
   };
 
   const sendControlAction = (action) => {
-    if (
-      controlWsRef.current &&
-      controlWsRef.current.readyState === WebSocket.OPEN
-    ) {
+    if (controlWsRef.current && controlWsRef.current.readyState === WebSocket.OPEN) {
       controlWsRef.current.send(JSON.stringify(action));
     }
   };
 
   const handleMouseMove = (e) => {
     if (!manualControl || !canvasRef.current) return;
-
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (1920 / rect.width);
-    const y = (e.clientY - rect.top) * (1080 / rect.height);
-
+    // Scale coordinates to match 1920x1080 canvas on the server
+    const x = Math.round((e.clientX - rect.left) * (1920 / rect.width));
+    const y = Math.round((e.clientY - rect.top) * (1080 / rect.height));
     sendControlAction({ type: "mouse_move", x, y });
   };
 
   const handleClick = (e) => {
     if (!manualControl || !canvasRef.current) return;
-
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (1920 / rect.width);
-    const y = (e.clientY - rect.top) * (1080 / rect.height);
-
+    const x = Math.round((e.clientX - rect.left) * (1920 / rect.width));
+    const y = Math.round((e.clientY - rect.top) * (1080 / rect.height));
+    // Send click
     sendControlAction({ type: "mouse_click", x, y, button: "left" });
   };
 
-  const handleKeyPress = (e) => {
+  const handleKeyDown = (e) => {
     if (!manualControl) return;
-    sendControlAction({ type: "keyboard", text: e.key });
+    // Map special keys for the server
+    const keyMap = {
+      " ": "Space",
+      "ArrowUp": "ArrowUp",
+      "ArrowDown": "ArrowDown",
+      "ArrowLeft": "ArrowLeft",
+      "ArrowRight": "ArrowRight",
+    };
+    const key = keyMap[e.key] || e.key;
+    sendControlAction({ type: "keyboard", text: key });
   };
 
-  const takeScreenshot = async () => {
+  // --- Media Helpers ---
+
+  const handleDownloadMedia = async (url, filename) => {
+    if (!server) return;
     try {
-      await apiClient.takeScreenshot(profile.serverId, profile.id);
-      loadData();
-      alert("Screenshot saved!");
-    } catch (error) {
-      alert("Failed to take screenshot: " + error.message);
+      // Fetch as blob with auth headers
+      const response = await apiClient.getClient(server.id).get(url, {
+        responseType: "blob",
+      });
+      const downloadUrl = window.URL.createObjectURL(response.data);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = filename;
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (e) {
+      console.error("Download failed", e);
+      alert("Failed to download media.");
     }
   };
 
-  const downloadScreenshot = (url) => {
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `screenshot_${Date.now()}.png`;
-    link.click();
-  };
+  // --- Render ---
+
+  if (isLoadingMeta) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader className="w-8 h-8 text-primary-500 animate-spin" />
+      </div>
+    );
+  }
 
   if (!profile) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-dark-400">Profile not found</p>
+      <div className="flex flex-col items-center justify-center h-full">
+        <p className="text-dark-400 mb-4">
+          Profile not found or server offline.
+        </p>
+        <button onClick={() => navigate("/")} className="btn btn-primary">
+          Go Home
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="animate-fade-in">
-      <div className="flex items-center mb-6">
-        <button onClick={() => navigate(-1)} className="btn btn-secondary mr-4">
+    <div className="animate-fade-in flex flex-col h-full">
+      {/* Header Bar */}
+      <div className="flex items-center mb-4 flex-shrink-0 gap-2">
+        <button onClick={() => navigate(-1)} className="btn btn-secondary">
           <ArrowLeft className="w-4 h-4" />
         </button>
-
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-white">{profile.name}</h1>
-          <p className="text-dark-400">Profile ID: {profile.id}</p>
+          <h1 className="text-xl font-bold text-white">{profile.name}</h1>
+          <p className="text-xs text-dark-400">{profile.id}</p>
         </div>
 
-        <div className="flex items-center space-x-3">
-          <span className={`status-badge status-${profile.status}`}>
-            {profile.status}
-          </span>
-          <button onClick={takeScreenshot} className="btn btn-primary">
-            <Download className="w-4 h-4 mr-2" />
-            Screenshot
+        {/* NEW: Navigation Controls */}
+        <div className="flex items-center space-x-2 bg-dark-800 p-1 rounded-lg">
+          <button onClick={handleBack} className="p-2 hover:bg-dark-700 rounded text-dark-300 hover:text-white" title="Go Back">
+            <ArrowLeftCircle className="w-4 h-4" />
           </button>
-          <button
-            onClick={() => setManualControl(!manualControl)}
-            className={`btn ${manualControl ? "btn-error" : "btn-success"}`}
-          >
-            {manualControl ? "Release Control" : "Take Control"}
+          <button onClick={handleRefresh} className="p-2 hover:bg-dark-700 rounded text-dark-300 hover:text-white" title="Refresh">
+            <RefreshCw className="w-4 h-4" />
           </button>
+          <form onSubmit={handleNavigate} className="flex items-center">
+            <Globe className="w-4 h-4 text-dark-500 mx-2" />
+            <input
+              type="text"
+              value={urlInput}
+              onChange={(e) => setUrlInput(e.target.value)}
+              placeholder="https://google.com"
+              className="bg-dark-900 border-none text-sm text-white rounded px-2 py-1 w-64 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+          </form>
         </div>
+
+        <button onClick={takeScreenshot} className="btn btn-primary ml-2">
+          <Camera className="w-4 h-4 mr-2" /> Screenshot
+        </button>
+
+        <button
+          onClick={() => setManualControl(!manualControl)}
+          className={`btn ${manualControl ? "btn-success" : "btn-secondary"} ml-2`}
+        >
+          {manualControl ? (
+            <>
+              <MousePointer className="w-4 h-4 mr-2" /> Controlling
+            </>
+          ) : (
+            <>
+              <Play className="w-4 h-4 mr-2" /> Take Control
+            </>
+          )}
+        </button>
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
-        {/* Main Screen */}
-        <div className="col-span-2 space-y-6">
-          <div className="card">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-white">Live Screen</h3>
-              {manualControl && (
-                <span className="text-sm text-success-500 animate-pulse">
-                  ● Manual Control Active
-                </span>
-              )}
-            </div>
+      {/* Main Layout */}
+      <div className="flex-1 grid grid-cols-3 gap-6 min-h-0">
+        {/* Left Column: Live View */}
+        <div className="col-span-2 flex flex-col min-h-0">
+          <div className="card flex-1 flex flex-col relative">
+            <h3 className="font-semibold text-white mb-2">Live View</h3>
+
+            {manualControl && (
+              <div className="absolute top-1 right-1 z-20 bg-success-500/80 text-white text-xs px-2 py-1 rounded animate-pulse">
+                Control Active - Click or Type to interact
+              </div>
+            )}
 
             <div
               ref={canvasRef}
-              className={`relative aspect-video bg-dark-900 rounded-lg overflow-hidden ${
-                manualControl ? "cursor-none" : ""
+              className={`flex-1 bg-dark-900 rounded-lg overflow-hidden relative border border-dark-700 ${
+                manualControl ? "cursor-crosshair" : ""
               }`}
               onMouseMove={handleMouseMove}
               onClick={handleClick}
-              onKeyDown={handleKeyPress}
-              tabIndex={manualControl ? 0 : -1}
+              onKeyDown={handleKeyDown}
+              tabIndex={manualControl ? 0 : -1} // Focus required for keyboard events
             >
               {screenshot ? (
                 <img
                   src={screenshot}
                   alt="Live screen"
                   className="w-full h-full object-contain"
+                  draggable="false"
                 />
               ) : (
-                <div className="flex items-center justify-center h-full">
+                <div className="flex items-center justify-center h-full text-dark-500">
                   <div className="text-center">
-                    <div className="animate-spin w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-                    <p className="text-sm text-dark-400">Loading...</p>
+                    <Loader className="w-6 h-6 animate-spin mx-auto mb-2" />
+                    Waiting for screen...
+                    <p className="text-xs mt-1">(Ensure profile is running)</p>
                   </div>
                 </div>
               )}
             </div>
           </div>
-
-          {/* Screenshots Gallery */}
-          <div className="card">
-            <h3 className="font-semibold text-white mb-4">Screenshots</h3>
-
-            <div className="grid grid-cols-4 gap-3">
-              {screenshots.slice(0, 8).map((ss) => (
-                <div key={ss.id} className="relative group">
-                  <img
-                    src={ss.url}
-                    alt="Screenshot"
-                    className="w-full aspect-video object-cover rounded-lg cursor-pointer"
-                    onClick={() => setScreenshot(ss.url)}
-                  />
-                  <button
-                    onClick={() => downloadScreenshot(ss.url)}
-                    className="absolute top-2 right-2 p-1 bg-dark-900/80 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <Download className="w-4 h-4 text-white" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
 
-        {/* Sidebar */}
-        <div className="space-y-6">
+        {/* Right Column: Metrics & Media */}
+        <div className="flex flex-col space-y-4 min-h-0 overflow-y-auto pr-2">
+
           {/* Metrics */}
           {metrics && (
-            <div className="card">
-              <h3 className="font-semibold text-white mb-4">Metrics</h3>
-
-              <div className="space-y-4">
+            <div className="card flex-shrink-0">
+              <h3 className="font-semibold text-white mb-3">Resources</h3>
+              <div className="space-y-3">
                 <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-dark-400">Memory</span>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-dark-400 flex items-center">
+                      <HardDrive className="w-3 h-3 mr-1" /> Memory
+                    </span>
                     <span className="text-white">
-                      {metrics.memory_mb}MB / {metrics.memory_limit_mb}MB
+                      {metrics.memory_mb} / {metrics.memory_limit_mb} MB
                     </span>
                   </div>
                   <div className="w-full h-2 bg-dark-700 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-primary-500 transition-all"
                       style={{
-                        width: `${(metrics.memory_mb / metrics.memory_limit_mb) * 100}%`,
+                        width: `${Math.min(100, (metrics.memory_mb / metrics.memory_limit_mb) * 100)}%`,
                       }}
                     />
                   </div>
                 </div>
-
                 <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-dark-400">CPU</span>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-dark-400 flex items-center">
+                      <Cpu className="w-3 h-3 mr-1" /> CPU
+                    </span>
                     <span className="text-white">
                       {metrics.cpu_percent?.toFixed(1)}%
                     </span>
@@ -285,7 +433,7 @@ function Monitoring() {
                   <div className="w-full h-2 bg-dark-700 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-success-500 transition-all"
-                      style={{ width: `${metrics.cpu_percent}%` }}
+                      style={{ width: `${Math.min(100, metrics.cpu_percent)}%` }}
                     />
                   </div>
                 </div>
@@ -293,28 +441,79 @@ function Monitoring() {
             </div>
           )}
 
-          {/* Logs */}
-          <div className="card">
-            <h3 className="font-semibold text-white mb-4">Logs</h3>
-
-            <div className="space-y-2 max-h-96 overflow-y-auto font-mono text-xs">
-              {logs.length === 0 ? (
-                <p className="text-dark-500">No logs yet</p>
-              ) : (
-                logs.map((log, i) => (
-                  <div key={i} className="text-dark-300">
-                    <span className="text-dark-500">{log.timestamp}</span>{" "}
-                    <span
-                      className={`${
-                        log.level === "error"
-                          ? "text-error-500"
-                          : log.level === "warning"
-                            ? "text-warning-500"
-                            : "text-dark-300"
-                      }`}
+          {/* Screenshots Gallery */}
+          <div className="card flex-shrink-0">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-semibold text-white">Screenshots</h3>
+              <span className="text-xs text-dark-400">{screenshots.length}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {screenshots.slice(0, 6).map((ss) => (
+                <div
+                  key={ss.id}
+                  className="aspect-video bg-dark-700 rounded overflow-hidden relative group cursor-pointer"
+                  onClick={() => setViewingImage(ss.url)}
+                >
+                  <img
+                    src={ss.url}
+                    alt="Thumb"
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all gap-2">
+                    {/* Stop propagation so clicking download doesn't open viewer */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDownloadMedia(ss.url, `${ss.id}.png`); }}
+                      className="p-1 bg-dark-800 rounded hover:bg-primary-600"
                     >
-                      {log.message}
-                    </span>
+                        <Download className="w-4 h-4 text-white" />
+                    </button>
+                    <button className="p-1 bg-dark-800 rounded hover:bg-primary-600">
+                        <Square className="w-4 h-4 text-white" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {screenshots.length === 0 && (
+                <div className="col-span-3 text-center py-4 text-xs text-dark-500">
+                  No screenshots yet. Click the button above.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Videos Gallery */}
+          <div className="card flex-shrink-0">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-semibold text-white">Session Videos</h3>
+              <span className="text-xs text-dark-400">{videos.length}</span>
+            </div>
+            <div className="space-y-2">
+              {videos.length === 0 ? (
+                <p className="text-xs text-dark-500 text-center py-4">
+                  Videos are recorded automatically.
+                </p>
+              ) : (
+                videos.slice(0, 4).map((vid) => (
+                  <div
+                    key={vid.id}
+                    className="flex items-center justify-between p-2 bg-dark-700 rounded hover:bg-dark-600 transition-colors cursor-pointer"
+                    onClick={() => setPlayingVideo(vid)}
+                  >
+                    <div className="flex items-center space-x-2">
+                      <Video className="w-4 h-4 text-primary-400" />
+                      <span className="text-xs text-white">
+                        {new Date(vid.timestamp * 1000).toLocaleString()}
+                      </span>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation(); // Prevent opening player
+                        handleDownloadMedia(vid.url, `${vid.id}.webm`);
+                      }}
+                      className="btn btn-xs btn-secondary"
+                    >
+                      <Download className="w-3 h-3" />
+                    </button>
                   </div>
                 ))
               )}
@@ -322,6 +521,74 @@ function Monitoring() {
           </div>
         </div>
       </div>
+
+      {/* --- Modals --- */}
+
+      {/* Image Viewer Modal */}
+      {viewingImage && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-8"
+          onClick={() => setViewingImage(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white hover:text-primary-400 transition-colors"
+            onClick={() => setViewingImage(null)}
+          >
+            <X className="w-8 h-8" />
+          </button>
+          <img
+            src={viewingImage}
+            alt="Screenshot"
+            className="max-w-full max-h-full object-contain shadow-2xl rounded"
+          />
+        </div>
+      )}
+
+      {/* Video Player Modal */}
+      {playingVideo && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-8"
+          onClick={() => setPlayingVideo(null)}
+        >
+          <div
+            className="bg-dark-900 rounded-lg p-4 w-full max-w-4xl shadow-2xl"
+            onClick={e => e.stopPropagation()} // Prevent closing when clicking inside video
+          >
+            <div className="flex justify-between items-center mb-2">
+                <h3 className="text-white font-medium">Recording Playback</h3>
+                <button
+                    onClick={() => setPlayingVideo(null)}
+                    className="text-dark-400 hover:text-white transition-colors"
+                >
+                    <X className="w-5 h-5" />
+                </button>
+            </div>
+            <video
+              controls
+              autoPlay
+              className="w-full bg-black rounded"
+              src={playingVideo.url}
+            >
+              Your browser does not support the video tag.
+            </video>
+            <div className="flex justify-end mt-3 gap-2">
+                <button
+                    onClick={() => handleDownloadMedia(playingVideo.url, `${playingVideo.id}.webm`)}
+                    className="btn btn-sm btn-primary"
+                >
+                    <Download className="w-3 h-3 mr-2" />
+                    Download Video
+                </button>
+                <button
+                    onClick={() => setPlayingVideo(null)}
+                    className="btn btn-sm btn-secondary"
+                >
+                    Close
+                </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -48,7 +48,7 @@ Your Custom Scripts (Playwright + PyAutoGUI)
 
 ```bash
 sudo apt update
-sudo apt install -y python3.10-venv python3-pip xvfb chromium-browser postgresql postgresql-contrib libpq-dev
+sudo apt install -y python3.10-venv python3-pip xvfb chromium-browser postgresql postgresql-contrib libpq-dev x11-utils
 ```
 
 ### Step 2: Database Setup
@@ -609,12 +609,12 @@ class ContextManager:
 
             self.browsers[profile.id] = browser
 
-            # --- CRITICAL: Extract PID for Memory Monitor ---
-            # The .process() method returns a Popen object wrapping the browser process
-            browser_process = browser.process()
-            if browser_process:
-                browser_pid = browser_process.pid
-                logger.info(f"[{profile.id}] Browser PID: {browser_pid}")
+            # --- CRITICAL FIX: PID Extraction ---
+            # Python Playwright 'Browser' object does NOT expose .process() like Node.js.
+            # We cannot get the PID directly for accurate monitoring.
+            # We pass None, and the MemoryMonitor will fallback to CDP metrics.
+            # browser_pid remains None (initialized above)
+            logger.info(f"[{profile.id}] Browser launched successfully (Python API does not expose PID).")
 
         except Exception as e:
             logger.error(f"[{profile.id}] Browser launch failed: {e}")
@@ -700,7 +700,7 @@ class ContextManager:
             on_threshold_exceeded=lambda: asyncio.create_task(
                 self.restart_profile(profile.id, profile, accounts)
             ),
-            browser_pid=browser_pid # Pass the PID here
+            browser_pid=browser_pid # Pass the PID here (None in Python)
         )
         self.monitors[profile.id] = monitor
 
@@ -2120,7 +2120,7 @@ async def record_proxy_history(
 
 
 # ---------------------------------------------------------
-# SCREENSHOTS & STREAMING
+# SCREENSHOTS, VIDEOS & STREAMING
 # ---------------------------------------------------------
 
 @app.get("/profiles/{profile_id}/screen")
@@ -2224,6 +2224,41 @@ async def get_screenshot(filename: str, _=verify_api_key):
 
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Screenshot not found")
+
+    return FileResponse(filepath)
+
+
+@app.get("/profiles/{profile_id}/videos")
+async def list_videos(profile_id: str, _=verify_api_key):
+    """List all video recordings for a profile"""
+    # Videos are stored in data_dir / "videos" / profile_id
+    video_dir = context_manager.data_dir / "videos" / profile_id
+
+    if not video_dir.exists():
+        return {"videos": []}
+
+    # Find all .webm files (Playwright default format)
+    files = sorted(video_dir.glob("*.webm"), reverse=True)
+
+    videos = []
+    for file in files:
+        videos.append({
+            "id": file.stem,
+            "timestamp": file.stat().st_mtime,
+            "url": f"/videos/{profile_id}/{file.name}",
+            "size_bytes": file.stat().st_size
+        })
+
+    return {"videos": videos}
+
+
+@app.get("/videos/{profile_id}/{filename}")
+async def get_video(profile_id: str, filename: str, _=verify_api_key):
+    """Serve a specific video file"""
+    filepath = context_manager.data_dir / "videos" / profile_id / filename
+
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Video not found")
 
     return FileResponse(filepath)
 
@@ -2540,7 +2575,8 @@ class XvfbManager:
         try:
             logger.info(f"Allocating display {display_str} for profile {profile_id}...")
 
-            # --- CLEANUP STALE LOCK FILES (Non-Blocking) ---
+            # --- CRITICAL FIX: Aggressive Cleanup ---
+            # 1. Remove lock file
             lock_file = f"/tmp/.X{display_num}-lock"
             if os.path.exists(lock_file):
                 logger.warning(f"Removing stale Xvfb lock file: {lock_file}")
@@ -2550,6 +2586,21 @@ class XvfbManager:
                     await loop.run_in_executor(None, os.remove, lock_file)
                 except OSError as e:
                     logger.error(f"Failed to remove lock file: {e}")
+
+            # 2. Kill any zombie process holding this display
+            # We use pkill to ensure the port is free before we try to bind.
+            try:
+                # The '|| true' ensures the command doesn't throw error if no process found
+                kill_cmd = f"pkill -f 'Xvfb {display_str}' || true"
+                kill_proc = await asyncio.create_subprocess_shell(
+                    kill_cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL
+                )
+                await kill_proc.wait()
+                logger.info(f"Killed any existing zombie processes for {display_str}")
+            except Exception as e:
+                logger.warning(f"Cleanup kill failed (safe to ignore): {e}")
             # -------------------------------------
 
             # 3. Launch Xvfb (Async)
@@ -2563,6 +2614,7 @@ class XvfbManager:
                 "-noreset"
             ]
 
+            # Redirect stderr to PIPE so we can capture WHY it fails if it crashes immediately
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.DEVNULL,
@@ -2577,12 +2629,26 @@ class XvfbManager:
                     break
 
                 if asyncio.get_event_loop().time() - start_time > 5:
-                    # Timeout, kill process and raise error
+                    # Timeout occurred
+                    err_output = b""
+                    # Try to read stderr to understand why it failed
+                    if proc.stderr:
+                        try:
+                            # Read available error output
+                            err_output = await asyncio.wait_for(proc.stderr.read(), timeout=0.5)
+                        except: pass
+
+                    # Kill the failed process
                     try:
                         proc.kill()
                         await proc.wait()
                     except: pass
-                    raise RuntimeError(f"Xvfb failed to start on {display_str} within 5s")
+
+                    err_msg = err_output.decode().strip() if err_output else "Unknown error (process exited or hung)"
+                    raise RuntimeError(
+                        f"Xvfb failed to start on {display_str} within 5s. "
+                        f"Stderr: {err_msg}"
+                    )
 
                 await asyncio.sleep(0.2)
 
@@ -2648,6 +2714,7 @@ class XvfbManager:
     async def _is_running(self, display: str) -> bool:
         """Check if Xvfb is running on a specific display ASYNCHRONOUSLY"""
         try:
+            # xdpyinfo is used to verify the X server is accepting connections
             proc = await asyncio.create_subprocess_exec(
                 "xdpyinfo", "-display", display,
                 stdout=asyncio.subprocess.DEVNULL,
@@ -3299,32 +3366,104 @@ import {
   ArrowLeft,
   Download,
   Play,
-  Pause,
   Square,
-  Maximize2,
+  Loader,
+  Camera,
+  Video,
+  Cpu,
+  HardDrive,
 } from "lucide-react";
 import { apiClient } from "../api/client";
+import { useServerHealth } from "../context/ServerHealthContext";
 import store from "../store/db";
 
 function Monitoring() {
   const { profileId } = useParams();
   const navigate = useNavigate();
+  const { servers, healthData } = useServerHealth();
+
+  // Core State
   const [profile, setProfile] = useState(null);
+  const [server, setServer] = useState(null);
+  const [isLoadingMeta, setIsLoadingMeta] = useState(true);
+
+  // View State
   const [screenshot, setScreenshot] = useState(null);
   const [screenshots, setScreenshots] = useState([]);
+  const [videos, setVideos] = useState([]);
   const [logs, setLogs] = useState([]);
   const [metrics, setMetrics] = useState(null);
+
+  // Control State
   const [manualControl, setManualControl] = useState(false);
   const wsRef = useRef(null);
   const controlWsRef = useRef(null);
   const canvasRef = useRef(null);
 
+  // 1. Initialization: Find Profile and Server
   useEffect(() => {
-    loadProfile();
-    const interval = setInterval(loadData, 2000);
-    return () => clearInterval(interval);
-  }, [profileId]);
+    const init = async () => {
+      if (!profileId || servers.length === 0) return;
 
+      let foundProfile = null;
+      let foundServer = null;
+
+      // Strategy: Check local store first (fastest)
+      const localProfiles = (await store.get("profiles")) || [];
+      const localP = localProfiles.find((p) => p.id === profileId);
+
+      if (localP) {
+        const s = servers.find((srv) => srv.id === localP.serverId);
+        if (s) {
+          foundProfile = localP;
+          foundServer = s;
+        }
+      }
+
+      // Fallback: Iterate servers if not found locally (e.g., deep link)
+      if (!foundProfile) {
+        for (const s of servers) {
+          if (healthData[s.id]?.status !== "online") continue;
+          try {
+            const data = await apiClient.getProfile(s.id, profileId);
+            if (data) {
+              foundProfile = data;
+              foundServer = s;
+              break;
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+      }
+
+      if (!foundProfile || !foundServer) {
+        setIsLoadingMeta(false);
+        return;
+      }
+
+      setProfile(foundProfile);
+      setServer(foundServer);
+      setIsLoadingMeta(false);
+    };
+
+    init();
+  }, [profileId, servers, healthData]);
+
+  // 2. Data Polling
+  useEffect(() => {
+    if (!server || !profile || profile.status !== "running") return;
+
+    const interval = setInterval(() => {
+      loadCurrentScreenshot();
+      loadMetrics();
+      loadMedia();
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [server, profile]);
+
+  // 3. Manual Control WebSocket
   useEffect(() => {
     if (manualControl) {
       startManualControl();
@@ -3334,45 +3473,66 @@ function Monitoring() {
     return () => stopManualControl();
   }, [manualControl]);
 
-  const loadProfile = () => {
-    const profiles = store.get("profiles") || [];
-    const p = profiles.find((p) => p.id === profileId);
-    setProfile(p);
+  const loadCurrentScreenshot = async () => {
+    if (!server || !profile) return;
+    try {
+      const url = await apiClient.getScreenshot(server.id, profile.id);
+      setScreenshot(url);
+    } catch (e) {
+      console.error("Screenshot fetch failed", e);
+    }
   };
 
-  const loadData = async () => {
-    if (!profile) return;
-
+  const loadMetrics = async () => {
+    if (!server || !profile) return;
     try {
-      // Load screenshot
-      const screenshotUrl = await apiClient.getScreenshot(
-        profile.serverId,
-        profile.id,
-      );
-      setScreenshot(screenshotUrl);
+      const data = await apiClient.getMetrics(server.id, profile.id);
+      setMetrics(data);
+    } catch (e) {}
+  };
 
-      // Load metrics
-      const metricsData = await apiClient.getMetrics(
-        profile.serverId,
-        profile.id,
-      );
-      setMetrics(metricsData);
+  const loadMedia = async () => {
+    if (!server || !profile) return;
+    try {
+      const ss = await apiClient.listScreenshots(server.id, profile.id);
+      setScreenshots(ss);
+      const vids = await apiClient.listVideos(server.id, profile.id);
+      setVideos(vids);
+    } catch (e) {}
+  };
 
-      // Load screenshots list
-      const screenshotsList = await apiClient.listScreenshots(
-        profile.serverId,
-        profile.id,
-      );
-      setScreenshots(screenshotsList);
+  const takeScreenshot = async () => {
+    if (!server || !profile) return;
+    try {
+      await apiClient.takeScreenshot(server.id, profile.id);
+      loadMedia();
+      alert("Screenshot saved!");
     } catch (error) {
-      console.error("Failed to load data:", error);
+      alert("Failed: " + error.message);
+    }
+  };
+
+  const handleDownloadVideo = async (vid) => {
+    if (!server) return;
+    try {
+      // We must fetch as blob with auth headers to download protected videos
+      const response = await apiClient.getClient(server.id).get(vid.url, {
+        responseType: "blob",
+      });
+      const url = window.URL.createObjectURL(response.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${profile.name}_${vid.id}.webm`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Download failed", e);
     }
   };
 
   const startManualControl = () => {
-    if (!profile) return;
-
-    const url = apiClient.getControlUrl(profile.serverId, profile.id);
+    if (!server || !profile) return;
+    const url = apiClient.getControlUrl(server.id, profile.id);
     controlWsRef.current = new WebSocket(url);
 
     controlWsRef.current.onopen = () => {
@@ -3426,76 +3586,79 @@ function Monitoring() {
     sendControlAction({ type: "keyboard", text: e.key });
   };
 
-  const takeScreenshot = async () => {
-    try {
-      await apiClient.takeScreenshot(profile.serverId, profile.id);
-      loadData();
-      alert("Screenshot saved!");
-    } catch (error) {
-      alert("Failed to take screenshot: " + error.message);
-    }
-  };
-
-  const downloadScreenshot = (url) => {
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `screenshot_${Date.now()}.png`;
-    link.click();
-  };
+  // Render States
+  if (isLoadingMeta) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader className="w-8 h-8 text-primary-500 animate-spin" />
+      </div>
+    );
+  }
 
   if (!profile) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-dark-400">Profile not found</p>
+      <div className="flex flex-col items-center justify-center h-full">
+        <p className="text-dark-400 mb-4">
+          Profile not found or server offline.
+        </p>
+        <button onClick={() => navigate("/")} className="btn btn-primary">
+          Go Home
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="animate-fade-in">
-      <div className="flex items-center mb-6">
+    <div className="animate-fade-in flex flex-col h-full">
+      {/* Header */}
+      <div className="flex items-center mb-4 flex-shrink-0">
         <button onClick={() => navigate(-1)} className="btn btn-secondary mr-4">
           <ArrowLeft className="w-4 h-4" />
         </button>
-
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-white">{profile.name}</h1>
-          <p className="text-dark-400">Profile ID: {profile.id}</p>
+          <h1 className="text-xl font-bold text-white">{profile.name}</h1>
+          <p className="text-xs text-dark-400">{profile.id}</p>
         </div>
-
         <div className="flex items-center space-x-3">
           <span className={`status-badge status-${profile.status}`}>
             {profile.status}
           </span>
           <button onClick={takeScreenshot} className="btn btn-primary">
-            <Download className="w-4 h-4 mr-2" />
-            Screenshot
+            <Camera className="w-4 h-4 mr-2" /> Screenshot
           </button>
           <button
             onClick={() => setManualControl(!manualControl)}
             className={`btn ${manualControl ? "btn-error" : "btn-success"}`}
           >
-            {manualControl ? "Release Control" : "Take Control"}
+            {manualControl ? (
+              <>
+                <Square className="w-4 h-4 mr-2" /> Stop Control
+              </>
+            ) : (
+              <>
+                <Play className="w-4 h-4 mr-2" /> Take Control
+              </>
+            )}
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
-        {/* Main Screen */}
-        <div className="col-span-2 space-y-6">
-          <div className="card">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-white">Live Screen</h3>
+      {/* Main Layout */}
+      <div className="flex-1 grid grid-cols-3 gap-6 min-h-0">
+        {/* Left Column: Live View */}
+        <div className="col-span-2 flex flex-col min-h-0">
+          <div className="card flex-1 flex flex-col">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="font-semibold text-white">Live View</h3>
               {manualControl && (
-                <span className="text-sm text-success-500 animate-pulse">
+                <span className="text-xs text-success-500 animate-pulse">
                   ● Manual Control Active
                 </span>
               )}
             </div>
-
             <div
               ref={canvasRef}
-              className={`relative aspect-video bg-dark-900 rounded-lg overflow-hidden ${
+              className={`relative flex-1 bg-dark-900 rounded-lg overflow-hidden border border-dark-700 ${
                 manualControl ? "cursor-none" : ""
               }`}
               onMouseMove={handleMouseMove}
@@ -3510,69 +3673,49 @@ function Monitoring() {
                   className="w-full h-full object-contain"
                 />
               ) : (
-                <div className="flex items-center justify-center h-full">
+                <div className="flex items-center justify-center h-full text-dark-500">
                   <div className="text-center">
-                    <div className="animate-spin w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-                    <p className="text-sm text-dark-400">Loading...</p>
+                    <Loader className="w-6 h-6 animate-spin mx-auto mb-2" />
+                    Connecting...
                   </div>
                 </div>
               )}
             </div>
           </div>
-
-          {/* Screenshots Gallery */}
-          <div className="card">
-            <h3 className="font-semibold text-white mb-4">Screenshots</h3>
-
-            <div className="grid grid-cols-4 gap-3">
-              {screenshots.slice(0, 8).map((ss) => (
-                <div key={ss.id} className="relative group">
-                  <img
-                    src={ss.url}
-                    alt="Screenshot"
-                    className="w-full aspect-video object-cover rounded-lg cursor-pointer"
-                    onClick={() => setScreenshot(ss.url)}
-                  />
-                  <button
-                    onClick={() => downloadScreenshot(ss.url)}
-                    className="absolute top-2 right-2 p-1 bg-dark-900/80 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <Download className="w-4 h-4 text-white" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
 
-        {/* Sidebar */}
-        <div className="space-y-6">
+        {/* Right Column: Metrics & Media */}
+        <div className="flex flex-col space-y-4 min-h-0 overflow-y-auto pr-2">
           {/* Metrics */}
           {metrics && (
-            <div className="card">
-              <h3 className="font-semibold text-white mb-4">Metrics</h3>
-
-              <div className="space-y-4">
+            <div className="card flex-shrink-0">
+              <h3 className="font-semibold text-white mb-3">Resources</h3>
+              <div className="space-y-3">
                 <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-dark-400">Memory</span>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-dark-400 flex items-center">
+                      <HardDrive className="w-3 h-3 mr-1" /> Memory
+                    </span>
                     <span className="text-white">
-                      {metrics.memory_mb}MB / {metrics.memory_limit_mb}MB
+                      {metrics.memory_mb} / {metrics.memory_limit_mb} MB
                     </span>
                   </div>
                   <div className="w-full h-2 bg-dark-700 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-primary-500 transition-all"
                       style={{
-                        width: `${(metrics.memory_mb / metrics.memory_limit_mb) * 100}%`,
+                        width: `${
+                          (metrics.memory_mb / metrics.memory_limit_mb) * 100
+                        }%`,
                       }}
                     />
                   </div>
                 </div>
-
                 <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-dark-400">CPU</span>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-dark-400 flex items-center">
+                      <Cpu className="w-3 h-3 mr-1" /> CPU
+                    </span>
                     <span className="text-white">
                       {metrics.cpu_percent?.toFixed(1)}%
                     </span>
@@ -3588,10 +3731,73 @@ function Monitoring() {
             </div>
           )}
 
-          {/* Logs */}
-          <div className="card">
-            <h3 className="font-semibold text-white mb-4">Logs</h3>
+          {/* Screenshots Gallery */}
+          <div className="card flex-shrink-0">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-semibold text-white">Screenshots</h3>
+              <span className="text-xs text-dark-400">
+                {screenshots.length}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {screenshots.slice(0, 6).map((ss) => (
+                <div
+                  key={ss.id}
+                  className="aspect-video bg-dark-700 rounded overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary-500 transition-all"
+                >
+                  <img
+                    src={ss.url}
+                    alt="Thumb"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              ))}
+              {screenshots.length === 0 && (
+                <div className="col-span-3 text-center py-4 text-xs text-dark-500">
+                  No screenshots taken yet.
+                </div>
+              )}
+            </div>
+          </div>
 
+          {/* NEW: Videos Gallery */}
+          <div className="card flex-shrink-0">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-semibold text-white">Recordings</h3>
+              <span className="text-xs text-dark-400">{videos.length}</span>
+            </div>
+            <div className="space-y-2">
+              {videos.length === 0 ? (
+                <p className="text-xs text-dark-500 text-center py-4">
+                  Recordings are saved automatically while running.
+                </p>
+              ) : (
+                videos.slice(0, 4).map((vid) => (
+                  <div
+                    key={vid.id}
+                    className="flex items-center justify-between p-2 bg-dark-700 rounded hover:bg-dark-600 transition-colors"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <Video className="w-4 h-4 text-primary-400" />
+                      <span className="text-xs text-white">
+                        {new Date(vid.timestamp * 1000).toLocaleString()}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handleDownloadVideo(vid)}
+                      className="btn btn-xs btn-secondary"
+                    >
+                      <Download className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Logs (Preserved from original) */}
+          <div className="card flex-shrink-0">
+            <h3 className="font-semibold text-white mb-4">Logs</h3>
             <div className="space-y-2 max-h-96 overflow-y-auto font-mono text-xs">
               {logs.length === 0 ? (
                 <p className="text-dark-500">No logs yet</p>
@@ -3625,61 +3831,107 @@ export default Monitoring;
 
 client/src/pages/Home.jsx
 
-import React, { useState, useEffect } from "react";
-import { Settings } from "lucide-react";
+import React, { useState, useEffect, useCallback } from "react";
+import { Settings, MonitorPlay, X } from "lucide-react";
 import LiveScreenGrid from "../components/LiveScreenGrid";
 import store from "../store/db";
+import { useServerHealth } from "../context/ServerHealthContext";
+import { apiClient } from "../api/client";
 
 function Home() {
+  const { servers, healthData } = useServerHealth();
   const [screens, setScreens] = useState([]);
-  const [screenCount, setScreenCount] = useState(4);
   const [showSettings, setShowSettings] = useState(false);
-  const [profiles, setProfiles] = useState([]);
+  const [availableProfiles, setAvailableProfiles] = useState([]);
+  const [selectedProfileIds, setSelectedProfileIds] = useState([]);
+
+  // 1. Load, Sync, and Auto-Populate Logic
+  const loadAndSync = useCallback(async () => {
+    const settings = (await store.get("settings")) || {};
+    let currentScreens = settings.homeScreens || [];
+    const localProfiles = (await store.get("profiles")) || [];
+
+    // Build list of RUNNING profiles from all connected servers
+    const runningProfiles = [];
+
+    for (const server of servers) {
+      // Only query online servers
+      if (healthData[server.id]?.status !== "online") continue;
+
+      try {
+        const serverProfiles = await apiClient.listProfiles(server.id);
+        serverProfiles.forEach((p) => {
+          if (p.status === "running") {
+            // Merge with local data to get friendly name
+            const local = localProfiles.find((lp) => lp.id === p.id);
+            runningProfiles.push({
+              id: p.id,
+              serverId: server.id,
+              name: local?.name || p.id,
+            });
+          }
+        });
+      } catch (e) {
+        console.warn(`Failed to sync profiles for server ${server.name}`);
+      }
+    }
+
+    setAvailableProfiles(runningProfiles);
+
+    // AUTO-POPULATE LOGIC
+    // If screens are empty, fill with first 4 running profiles found
+    if (currentScreens.length === 0 && runningProfiles.length > 0) {
+      currentScreens = runningProfiles.slice(0, 4).map((p) => ({
+        serverId: p.serverId,
+        profileId: p.id,
+        profileName: p.name,
+      }));
+
+      // Save to store immediately so it persists
+      await store.set("settings", { ...settings, homeScreens: currentScreens });
+    }
+
+    setScreens(currentScreens);
+
+    // Update selection state for the modal
+    setSelectedProfileIds(currentScreens.map((s) => s.profileId));
+  }, [servers, healthData]);
 
   useEffect(() => {
-    loadSettings();
-    loadProfiles();
-  }, []);
+    loadAndSync();
+    // Refresh every 15 seconds to catch new profiles
+    const interval = setInterval(loadAndSync, 15000);
+    return () => clearInterval(interval);
+  }, [loadAndSync]);
 
-  const loadSettings = async () => {
-    const settings = (await store.get("settings")) || {};
-    setScreenCount(settings.homeScreenCount || 4);
-    setScreens(settings.homeScreens || []);
-  };
-
-  const loadProfiles = async () => {
-    const storedProfiles = (await store.get("profiles")) || [];
-    setProfiles(storedProfiles.filter((p) => p.status === "running"));
+  // 2. Modal Actions
+  const handleToggleProfile = (profile) => {
+    const exists = selectedProfileIds.includes(profile.id);
+    if (exists) {
+      setSelectedProfileIds((prev) => prev.filter((id) => id !== profile.id));
+    } else {
+      if (selectedProfileIds.length >= 12) {
+        alert("Maximum 12 screens allowed.");
+        return;
+      }
+      setSelectedProfileIds((prev) => [...prev, profile.id]);
+    }
   };
 
   const saveSettings = async () => {
+    const newScreens = availableProfiles
+      .filter((p) => selectedProfileIds.includes(p.id))
+      .map((p) => ({
+        serverId: p.serverId,
+        profileId: p.id,
+        profileName: p.name,
+      }));
+
     const settings = (await store.get("settings")) || {};
-    settings.homeScreenCount = screenCount;
-    settings.homeScreens = screens;
-    await store.set("settings", settings);
+    await store.set("settings", { ...settings, homeScreens: newScreens });
+    setScreens(newScreens);
     setShowSettings(false);
   };
-
-  const addScreen = (profileId) => {
-    const profile = profiles.find((p) => p.id === profileId);
-    if (!profile || screens.some((s) => s.profileId === profileId)) return;
-
-    const newScreen = {
-      serverId: profile.serverId,
-      profileId: profile.id,
-      profileName: profile.name,
-    };
-
-    const updatedScreens = [...screens, newScreen];
-    setScreens(updatedScreens);
-  };
-
-  const removeScreen = (profileId) => {
-    const updatedScreens = screens.filter((s) => s.profileId !== profileId);
-    setScreens(updatedScreens);
-  };
-
-  const hasEnoughProfiles = profiles.length >= screenCount;
 
   return (
     <div className="animate-fade-in">
@@ -3698,115 +3950,80 @@ function Home() {
         </button>
       </div>
 
-      {screens.length === 0 ? (
-        <div className="card text-center py-16">
-          <h3 className="text-xl font-semibold text-white mb-2">
-            No screens configured
-          </h3>
-          <p className="text-dark-400 mb-6">
-            {profiles.length === 0
-              ? "Launch a profile to view live screens"
-              : 'Click "Configure Screens" to select which profiles to display'}
-          </p>
-          {profiles.length > 0 && (
-            <button
-              onClick={() => setShowSettings(true)}
-              className="btn btn-primary"
-            >
-              Configure Screens
-            </button>
-          )}
-        </div>
-      ) : (
-        <LiveScreenGrid screens={screens} />
-      )}
+      {/* Render Grid - Component handles the 4-slot logic */}
+      <LiveScreenGrid screens={screens} onRefresh={loadAndSync} />
 
-      {/* Settings Modal */}
+      {/* Settings Modal - Updated UI */}
       {showSettings && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-dark-800 rounded-lg p-6 w-full max-w-2xl">
-            <h3 className="text-xl font-bold text-white mb-4">
-              Configure Home Screens
-            </h3>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-dark-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] flex flex-col border border-dark-700 shadow-xl">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold text-white">
+                Configure Screens
+              </h3>
+              <button
+                onClick={() => setShowSettings(false)}
+                className="text-dark-400 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-            <div className="space-y-6">
-              <div>
-                <label className="block text-sm text-dark-300 mb-2">
-                  Number of screens to display (minimum 4)
-                </label>
-                <input
-                  type="number"
-                  min="4"
-                  max="12"
-                  className="input w-full"
-                  value={screenCount}
-                  onChange={(e) => setScreenCount(parseInt(e.target.value))}
-                />
-              </div>
+            <div className="mb-4 text-sm text-dark-400 border-b border-dark-700 pb-3">
+              <span className="text-white font-medium">
+                {selectedProfileIds.length}
+              </span>{" "}
+              screens selected (Min 4 recommended)
+            </div>
 
-              <div>
-                <label className="block text-sm text-dark-300 mb-2">
-                  Select profiles to display ({screens.length}/{screenCount})
-                </label>
-
-                {profiles.length === 0 ? (
-                  <p className="text-dark-500 text-sm">
-                    No running profiles available
+            <div className="flex-1 overflow-y-auto space-y-2 pr-2">
+              {availableProfiles.length === 0 ? (
+                <div className="text-center text-dark-500 py-12 bg-dark-900 rounded-lg mt-2">
+                  <MonitorPlay className="w-8 h-8 mx-auto mb-3 opacity-50" />
+                  No running profiles found.
+                  <p className="text-xs mt-1">
+                    Start a profile from the Profiles tab.
                   </p>
-                ) : (
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {profiles.map((profile) => {
-                      const isSelected = screens.some(
-                        (s) => s.profileId === profile.id,
-                      );
-                      const canAdd = screens.length < screenCount;
-
-                      return (
-                        <div
-                          key={profile.id}
-                          className="flex items-center justify-between p-3 bg-dark-900 rounded-lg"
-                        >
-                          <div>
-                            <p className="text-white font-medium">
-                              {profile.name}
-                            </p>
-                            <p className="text-sm text-dark-400">
-                              {profile.id}
-                            </p>
-                          </div>
-
-                          {isSelected ? (
-                            <button
-                              onClick={() => removeScreen(profile.id)}
-                              className="btn btn-error btn-sm"
-                            >
-                              Remove
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => addScreen(profile.id)}
-                              className="btn btn-primary btn-sm"
-                              disabled={!canAdd}
-                            >
-                              {canAdd ? "Add" : "Full"}
-                            </button>
-                          )}
+                </div>
+              ) : (
+                availableProfiles.map((profile) => {
+                  const isSelected = selectedProfileIds.includes(profile.id);
+                  return (
+                    <div
+                      key={profile.id}
+                      onClick={() => handleToggleProfile(profile)}
+                      className={`p-3 rounded-lg flex items-center justify-between cursor-pointer transition-all border ${
+                        isSelected
+                          ? "bg-primary-900/30 border-primary-500"
+                          : "bg-dark-900 border-transparent hover:border-dark-600"
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <MonitorPlay
+                          className={`w-5 h-5 ${
+                            isSelected ? "text-primary-400" : "text-dark-500"
+                          }`}
+                        />
+                        <div>
+                          <p className="text-white font-medium">
+                            {profile.name}
+                          </p>
+                          <p className="text-xs text-dark-400">{profile.id}</p>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {screens.length < screenCount && profiles.length > 0 && (
-                <p className="text-sm text-warning-500">
-                  ⚠️ You have fewer screens selected than the minimum (
-                  {screens.length}/{screenCount})
-                </p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => {}}
+                        className="h-5 w-5 rounded border-dark-500 text-primary-600 focus:ring-primary-500 cursor-pointer bg-dark-700"
+                      />
+                    </div>
+                  );
+                })
               )}
             </div>
 
-            <div className="flex space-x-3 mt-6">
+            <div className="flex space-x-3 mt-6 pt-4 border-t border-dark-700">
               <button
                 onClick={() => setShowSettings(false)}
                 className="btn btn-secondary flex-1"
@@ -3814,7 +4031,7 @@ function Home() {
                 Cancel
               </button>
               <button onClick={saveSettings} className="btn btn-primary flex-1">
-                Save
+                Save Layout
               </button>
             </div>
           </div>
@@ -3825,6 +4042,7 @@ function Home() {
 }
 
 export default Home;
+
 
 client/src/pages/Accounts.jsx
 
@@ -5588,48 +5806,57 @@ client/src/components/LiveScreenGrid.jsx
 import React from "react";
 import { useNavigate } from "react-router-dom";
 import LiveScreenCard from "./LiveScreenCard";
+import { MonitorOff } from "lucide-react";
 
-function LiveScreenGrid({ screens }) {
+function LiveScreenGrid({ screens, onRefresh }) {
   const navigate = useNavigate();
 
   const handleExpand = (profileId) => {
     navigate(`/monitoring/${profileId}`);
   };
 
-  if (!screens || screens.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center">
-          <p className="text-xl text-dark-400 mb-4">No screens to display</p>
-          <p className="text-sm text-dark-500">
-            Launch a profile to view live screens
-          </p>
-        </div>
-      </div>
-    );
+  // Create a fixed array of 4 slots to maintain grid layout
+  // We pad the screens array to have a minimum length of 4
+  const displaySlots = [...screens];
+  while (displaySlots.length < 4) {
+    displaySlots.push(null);
   }
+  // Optional: Slice to exactly 4 for the main dashboard view
+  const viewSlots = displaySlots.slice(0, 4);
 
   return (
-    <div
-      className={`grid gap-6 ${
-        screens.length === 1
-          ? "grid-cols-1"
-          : screens.length === 2
-            ? "grid-cols-2"
-            : screens.length === 3
-              ? "grid-cols-3"
-              : "grid-cols-2 xl:grid-cols-4"
-      }`}
-    >
-      {screens.map((screen) => (
-        <LiveScreenCard
-          key={screen.profileId}
-          serverId={screen.serverId}
-          profileId={screen.profileId}
-          profileName={screen.profileName}
-          onExpand={() => handleExpand(screen.profileId)}
-        />
-      ))}
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {viewSlots.map((screen, index) => {
+        // Render Placeholder for empty slots
+        if (!screen) {
+          return (
+            <div
+              key={`placeholder-${index}`}
+              className="card aspect-video flex flex-col items-center justify-center border-2 border-dashed border-dark-700 bg-dark-900/50"
+            >
+              <MonitorOff className="w-10 h-10 text-dark-600 mb-3" />
+              <p className="text-dark-400 text-center text-sm">
+                Empty Slot #{index + 1}
+                <br />
+                <span className="text-xs text-dark-500">
+                  Start a profile to view here
+                </span>
+              </p>
+            </div>
+          );
+        }
+
+        // Render Live Card for valid slots
+        return (
+          <LiveScreenCard
+            key={screen.profileId}
+            serverId={screen.serverId}
+            profileId={screen.profileId}
+            profileName={screen.profileName}
+            onExpand={() => handleExpand(screen.profileId)}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -5639,72 +5866,86 @@ export default LiveScreenGrid;
 client/src/components/LiveScreenCard.jsx
 
 import React, { useState, useEffect, useRef } from "react";
-import { Maximize2, Pause, Play, Square } from "lucide-react";
+import { Maximize2, AlertTriangle, Loader } from "lucide-react";
 import { apiClient } from "../api/client";
 
 function LiveScreenCard({ serverId, profileId, profileName, onExpand }) {
   const [imageUrl, setImageUrl] = useState(null);
-  const [status, setStatus] = useState("idle");
-  const wsRef = useRef(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [hasError, setHasError] = useState(false);
   const intervalRef = useRef(null);
 
   useEffect(() => {
-    startStreaming();
-    return () => stopStreaming();
+    fetchScreenshot();
+    // Poll every 2 seconds for updates
+    intervalRef.current = setInterval(fetchScreenshot, 2000);
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
   }, [serverId, profileId]);
 
-  const startStreaming = () => {
-    // Use periodic screenshots instead of WebSocket for simplicity
-    intervalRef.current = setInterval(async () => {
-      try {
-        const url = await apiClient.getScreenshot(serverId, profileId);
-        setImageUrl(url);
-      } catch (error) {
-        console.error("Failed to fetch screenshot:", error);
+  const fetchScreenshot = async () => {
+    try {
+      // Revoke old URL to prevent memory leaks
+      if (imageUrl && imageUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(imageUrl);
       }
-    }, 1000); // Update every second
-  };
 
-  const stopStreaming = () => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
+      const url = await apiClient.getScreenshot(serverId, profileId);
+      setImageUrl(url);
+      setHasError(false);
+      setIsLoading(false);
+    } catch (error) {
+      console.error("Screenshot fetch failed:", error);
+      setHasError(true);
+      setIsLoading(false);
     }
   };
 
   return (
-    <div className="card group relative overflow-hidden">
+    <div className="card group relative overflow-hidden flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h3 className="text-sm font-medium text-white">{profileName}</h3>
-          <p className="text-xs text-dark-400">Profile ID: {profileId}</p>
-        </div>
-        <div className="flex items-center space-x-2">
-          <span className={`status-badge status-${status}`}>{status}</span>
-          <button
-            onClick={onExpand}
-            className="p-1 text-dark-400 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
-          >
-            <Maximize2 className="w-4 h-4" />
-          </button>
-        </div>
+      <div className="flex items-center justify-between mb-2 px-1">
+        <h3 className="text-sm font-medium text-white truncate">
+          {profileName}
+        </h3>
+        <button
+          onClick={onExpand}
+          className="p-1 text-dark-400 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
+          title="Open Full Monitor"
+        >
+          <Maximize2 className="w-4 h-4" />
+        </button>
       </div>
 
-      {/* Screen */}
-      <div className="relative aspect-video bg-dark-900 rounded-lg overflow-hidden">
-        {imageUrl ? (
+      {/* Screen Area */}
+      <div className="relative flex-1 bg-dark-900 rounded-lg overflow-hidden border border-dark-700 min-h-[200px]">
+        {/* Loading State */}
+        {isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-dark-800 z-10">
+            <Loader className="w-6 h-6 text-primary-500 animate-spin" />
+          </div>
+        )}
+
+        {/* Error State */}
+        {hasError && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-dark-900 p-4 z-10">
+            <AlertTriangle className="w-8 h-8 text-error-500 mb-2" />
+            <p className="text-xs text-dark-400 text-center">
+              Connection Failed
+            </p>
+          </div>
+        )}
+
+        {/* Success State */}
+        {!isLoading && !hasError && imageUrl && (
           <img
             src={imageUrl}
             alt="Live screen"
             className="w-full h-full object-contain"
+            onError={() => setHasError(true)} // Handle image decoding errors
           />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <div className="text-center">
-              <div className="animate-spin w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-              <p className="text-sm text-dark-400">Loading...</p>
-            </div>
-          </div>
         )}
       </div>
     </div>
@@ -6311,6 +6552,16 @@ class BrowserFarmClient {
   }
 
   // -----------------------------------------------------------
+  // Videos (NEW)
+  // -----------------------------------------------------------
+
+  async listVideos(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.get(`/profiles/${profileId}/videos`);
+    return data.videos;
+  }
+
+  // -----------------------------------------------------------
   // Metrics
   // -----------------------------------------------------------
 
@@ -6562,6 +6813,3 @@ app.on("activate", () => {
     createWindow();
   }
 });
-
-
-Okay okay so we fixed the 3 crashed state sure umm okay nice I think all others but here is the thing the Xvfb still ahngs and now what happended is when I clicked to start the profile the server disconnected while I am not sure it should have actually disconnected or did, so if you see

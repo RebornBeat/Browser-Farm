@@ -443,6 +443,73 @@ async def delete_profile(profile_id: str, _=verify_api_key, db: AsyncSession = D
 
 
 # ---------------------------------------------------------
+# NAVIGATION ENDPOINTS (NEW)
+# ---------------------------------------------------------
+
+@app.post("/profiles/{profile_id}/navigate")
+async def navigate_profile(profile_id: str, url: str, _=verify_api_key):
+    """
+    Navigate the active page to a specific URL.
+    Used for Manual mode control.
+    """
+    if profile_id not in context_manager.contexts:
+        raise HTTPException(status_code=404, detail="Profile not running")
+
+    context = context_manager.contexts[profile_id]
+    pages = context.pages
+
+    # If no page exists, create one
+    if not pages:
+        page = await context.new_page()
+    else:
+        page = pages[-1]
+
+    try:
+        # Navigate and wait for DOM content
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        return {"status": "ok", "url": page.url}
+    except Exception as e:
+        logger.error(f"Navigation failed for {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Navigation failed: {str(e)}")
+
+
+@app.post("/profiles/{profile_id}/refresh")
+async def refresh_profile(profile_id: str, _=verify_api_key):
+    """Refresh the current page."""
+    if profile_id not in context_manager.contexts:
+        raise HTTPException(status_code=404, detail="Profile not running")
+
+    pages = context_manager.contexts[profile_id].pages
+    if not pages:
+        raise HTTPException(status_code=400, detail="No active page to refresh")
+
+    try:
+        await pages[-1].reload()
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/profiles/{profile_id}/go_back")
+async def go_back_profile(profile_id: str, _=verify_api_key):
+    """Go back in browser history."""
+    if profile_id not in context_manager.contexts:
+        raise HTTPException(status_code=404, detail="Profile not running")
+
+    pages = context_manager.contexts[profile_id].pages
+    if not pages:
+        raise HTTPException(status_code=400, detail="No active page")
+
+    try:
+        await pages[-1].go_back()
+        return {"status": "ok"}
+    except Exception as e:
+        # Playwright throws if no history
+        logger.warning(f"Go back failed for {profile_id}: {e}")
+        return {"status": "ok"}
+
+
+# ---------------------------------------------------------
 # HISTORY & COMPLIANCE
 # ---------------------------------------------------------
 
@@ -489,7 +556,7 @@ async def record_proxy_history(
 
 
 # ---------------------------------------------------------
-# SCREENSHOTS & STREAMING
+# SCREENSHOTS, VIDEOS & STREAMING
 # ---------------------------------------------------------
 
 @app.get("/profiles/{profile_id}/screen")
@@ -593,6 +660,41 @@ async def get_screenshot(filename: str, _=verify_api_key):
 
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Screenshot not found")
+
+    return FileResponse(filepath)
+
+
+@app.get("/profiles/{profile_id}/videos")
+async def list_videos(profile_id: str, _=verify_api_key):
+    """List all video recordings for a profile"""
+    # Videos are stored in data_dir / "videos" / profile_id
+    video_dir = context_manager.data_dir / "videos" / profile_id
+
+    if not video_dir.exists():
+        return {"videos": []}
+
+    # Find all .webm files (Playwright default format)
+    files = sorted(video_dir.glob("*.webm"), reverse=True)
+
+    videos = []
+    for file in files:
+        videos.append({
+            "id": file.stem,
+            "timestamp": file.stat().st_mtime,
+            "url": f"/videos/{profile_id}/{file.name}",
+            "size_bytes": file.stat().st_size
+        })
+
+    return {"videos": videos}
+
+
+@app.get("/videos/{profile_id}/{filename}")
+async def get_video(profile_id: str, filename: str, _=verify_api_key):
+    """Serve a specific video file"""
+    filepath = context_manager.data_dir / "videos" / profile_id / filename
+
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Video not found")
 
     return FileResponse(filepath)
 
