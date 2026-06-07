@@ -2,15 +2,37 @@ import asyncio
 import logging
 import os
 import json
+import io
+import random
 from pathlib import Path
 from typing import Dict, Optional, List
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
+from PIL import Image, ImageDraw
 from .models import Profile, ProfileStatus, ProxyConfig, ProfileMode
 from .script_runner import ScriptRunner
 from .memory_monitor import MemoryMonitor
 from .xvfb_manager import XvfbManager
 
 logger = logging.getLogger(__name__)
+
+# NEW: List of high-target sites for random startup
+STARTUP_SITES = [
+    "https://www.google.com",
+    "https://www.youtube.com",
+    "https://www.reddit.com",
+    "https://twitter.com",
+    "https://www.amazon.com",
+    "https://www.wikipedia.org",
+    "https://www.linkedin.com",
+    "https://www.instagram.com",
+    "https://www.twitch.tv",
+    "https://www.duckduckgo.com",
+    "https://www.bing.com",
+    "https://news.ycombinator.com",
+    "https://github.com",
+    "https://www.netflix.com",
+    "https://www.spotify.com"
+]
 
 
 class ContextManager:
@@ -199,6 +221,18 @@ class ContextManager:
             # Create a default page immediately so PyAutoGUI has a window to target
             # This ensures the browser window is "realized" on the Xvfb display
             page = await context.new_page()
+
+            # --- NEW: Random Startup Page ---
+            random_url = random.choice(STARTUP_SITES)
+            logger.info(f"[{profile.id}] Navigating to random startup: {random_url}")
+
+            try:
+                # Navigate with a short timeout
+                await page.goto(random_url, wait_until="domcontentloaded", timeout=30000)
+            except Exception as e:
+                logger.warning(f"[{profile.id}] Failed to load startup page {random_url}: {e}")
+                # Continue anyway, browser is open
+
             logger.info(f"[{profile.id}] Context created with Stealth Injection")
 
         except Exception as e:
@@ -327,12 +361,38 @@ class ContextManager:
         pages = context.pages
 
         if not pages:
-            # If no page is open, return a placeholder or raise error
-            raise ValueError("No pages open in context")
+            # RACE CONDITION FIX:
+            # If screenshot is requested before the default page is created,
+            # return a placeholder image instead of crashing.
+            logger.info(f"[{profile_id}] Screenshot requested but no pages open yet. Sending placeholder.")
+            return self._generate_placeholder_image("Initializing...")
 
         # Capture from the active page (usually the last one)
         page = pages[-1]
         return await page.screenshot(type="png")
+
+    def _generate_placeholder_image(self, text: str) -> bytes:
+        """
+        Generates a simple black image with centered text.
+        Used when the browser is still initializing.
+        """
+        # Resolution matching the browser
+        width, height = 1920, 1080
+
+        # Dark background color (matching client theme)
+        img = Image.new('RGB', (width, height), color=(15, 23, 42))
+        d = ImageDraw.Draw(img)
+
+        # Draw text (White/Grey color)
+        # Note: We use default font for simplicity.
+        # Text position is roughly centered.
+        d.text((width / 2, height / 2), text, fill=(100, 116, 139), anchor="mm")
+
+        # Save to bytes
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        buf.seek(0)
+        return buf.read()
 
     async def save_screenshot(self, profile_id: str) -> str:
         """Save a screenshot to disk and return filename."""
@@ -358,3 +418,12 @@ class ContextManager:
         if profile_id not in self.monitors:
             return {}
         return self.monitors[profile_id].get_metrics()
+
+    def get_current_url(self, profile_id: str) -> Optional[str]:
+        """Returns the URL of the active page."""
+        if profile_id not in self.contexts:
+            return None
+        pages = self.contexts[profile_id].pages
+        if not pages:
+            return None
+        return pages[-1].url

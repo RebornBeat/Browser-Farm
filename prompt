@@ -470,15 +470,37 @@ import asyncio
 import logging
 import os
 import json
+import io
+import random
 from pathlib import Path
 from typing import Dict, Optional, List
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
+from PIL import Image, ImageDraw
 from .models import Profile, ProfileStatus, ProxyConfig, ProfileMode
 from .script_runner import ScriptRunner
 from .memory_monitor import MemoryMonitor
 from .xvfb_manager import XvfbManager
 
 logger = logging.getLogger(__name__)
+
+# NEW: List of high-target sites for random startup
+STARTUP_SITES = [
+    "https://www.google.com",
+    "https://www.youtube.com",
+    "https://www.reddit.com",
+    "https://twitter.com",
+    "https://www.amazon.com",
+    "https://www.wikipedia.org",
+    "https://www.linkedin.com",
+    "https://www.instagram.com",
+    "https://www.twitch.tv",
+    "https://www.duckduckgo.com",
+    "https://www.bing.com",
+    "https://news.ycombinator.com",
+    "https://github.com",
+    "https://www.netflix.com",
+    "https://www.spotify.com"
+]
 
 
 class ContextManager:
@@ -667,6 +689,18 @@ class ContextManager:
             # Create a default page immediately so PyAutoGUI has a window to target
             # This ensures the browser window is "realized" on the Xvfb display
             page = await context.new_page()
+
+            # --- NEW: Random Startup Page ---
+            random_url = random.choice(STARTUP_SITES)
+            logger.info(f"[{profile.id}] Navigating to random startup: {random_url}")
+
+            try:
+                # Navigate with a short timeout
+                await page.goto(random_url, wait_until="domcontentloaded", timeout=30000)
+            except Exception as e:
+                logger.warning(f"[{profile.id}] Failed to load startup page {random_url}: {e}")
+                # Continue anyway, browser is open
+
             logger.info(f"[{profile.id}] Context created with Stealth Injection")
 
         except Exception as e:
@@ -795,12 +829,38 @@ class ContextManager:
         pages = context.pages
 
         if not pages:
-            # If no page is open, return a placeholder or raise error
-            raise ValueError("No pages open in context")
+            # RACE CONDITION FIX:
+            # If screenshot is requested before the default page is created,
+            # return a placeholder image instead of crashing.
+            logger.info(f"[{profile_id}] Screenshot requested but no pages open yet. Sending placeholder.")
+            return self._generate_placeholder_image("Initializing...")
 
         # Capture from the active page (usually the last one)
         page = pages[-1]
         return await page.screenshot(type="png")
+
+    def _generate_placeholder_image(self, text: str) -> bytes:
+        """
+        Generates a simple black image with centered text.
+        Used when the browser is still initializing.
+        """
+        # Resolution matching the browser
+        width, height = 1920, 1080
+
+        # Dark background color (matching client theme)
+        img = Image.new('RGB', (width, height), color=(15, 23, 42))
+        d = ImageDraw.Draw(img)
+
+        # Draw text (White/Grey color)
+        # Note: We use default font for simplicity.
+        # Text position is roughly centered.
+        d.text((width / 2, height / 2), text, fill=(100, 116, 139), anchor="mm")
+
+        # Save to bytes
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        buf.seek(0)
+        return buf.read()
 
     async def save_screenshot(self, profile_id: str) -> str:
         """Save a screenshot to disk and return filename."""
@@ -826,6 +886,16 @@ class ContextManager:
         if profile_id not in self.monitors:
             return {}
         return self.monitors[profile_id].get_metrics()
+
+    def get_current_url(self, profile_id: str) -> Optional[str]:
+        """Returns the URL of the active page."""
+        if profile_id not in self.contexts:
+            return None
+        pages = self.contexts[profile_id].pages
+        if not pages:
+            return None
+        return pages[-1].url
+
 
 server/src/database.py
 
@@ -2074,6 +2144,73 @@ async def delete_profile(profile_id: str, _=verify_api_key, db: AsyncSession = D
 
 
 # ---------------------------------------------------------
+# NAVIGATION ENDPOINTS (NEW)
+# ---------------------------------------------------------
+
+@app.post("/profiles/{profile_id}/navigate")
+async def navigate_profile(profile_id: str, url: str, _=verify_api_key):
+    """
+    Navigate the active page to a specific URL.
+    Used for Manual mode control.
+    """
+    if profile_id not in context_manager.contexts:
+        raise HTTPException(status_code=404, detail="Profile not running")
+
+    context = context_manager.contexts[profile_id]
+    pages = context.pages
+
+    # If no page exists, create one
+    if not pages:
+        page = await context.new_page()
+    else:
+        page = pages[-1]
+
+    try:
+        # Navigate and wait for DOM content
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        return {"status": "ok", "url": page.url}
+    except Exception as e:
+        logger.error(f"Navigation failed for {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Navigation failed: {str(e)}")
+
+
+@app.post("/profiles/{profile_id}/refresh")
+async def refresh_profile(profile_id: str, _=verify_api_key):
+    """Refresh the current page."""
+    if profile_id not in context_manager.contexts:
+        raise HTTPException(status_code=404, detail="Profile not running")
+
+    pages = context_manager.contexts[profile_id].pages
+    if not pages:
+        raise HTTPException(status_code=400, detail="No active page to refresh")
+
+    try:
+        await pages[-1].reload()
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/profiles/{profile_id}/go_back")
+async def go_back_profile(profile_id: str, _=verify_api_key):
+    """Go back in browser history."""
+    if profile_id not in context_manager.contexts:
+        raise HTTPException(status_code=404, detail="Profile not running")
+
+    pages = context_manager.contexts[profile_id].pages
+    if not pages:
+        raise HTTPException(status_code=400, detail="No active page")
+
+    try:
+        await pages[-1].go_back()
+        return {"status": "ok"}
+    except Exception as e:
+        # Playwright throws if no history
+        logger.warning(f"Go back failed for {profile_id}: {e}")
+        return {"status": "ok"}
+
+
+# ---------------------------------------------------------
 # HISTORY & COMPLIANCE
 # ---------------------------------------------------------
 
@@ -2298,6 +2435,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 server/src/utils.py
 
@@ -3364,14 +3502,18 @@ import React, { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
-  Download,
-  Play,
-  Square,
-  Loader,
   Camera,
   Video,
+  Loader,
+  Download,
   Cpu,
   HardDrive,
+  RefreshCw,
+  ArrowLeftCircle,
+  Globe,
+  X,
+  Play,
+  MousePointer,
 } from "lucide-react";
 import { apiClient } from "../api/client";
 import { useServerHealth } from "../context/ServerHealthContext";
@@ -3382,23 +3524,28 @@ function Monitoring() {
   const navigate = useNavigate();
   const { servers, healthData } = useServerHealth();
 
-  // Core State
+  // --- Core State ---
   const [profile, setProfile] = useState(null);
   const [server, setServer] = useState(null);
   const [isLoadingMeta, setIsLoadingMeta] = useState(true);
 
-  // View State
+  // --- View State ---
   const [screenshot, setScreenshot] = useState(null);
   const [screenshots, setScreenshots] = useState([]);
   const [videos, setVideos] = useState([]);
-  const [logs, setLogs] = useState([]);
   const [metrics, setMetrics] = useState(null);
 
-  // Control State
+  // --- Navigation State ---
+  const [urlInput, setUrlInput] = useState("");
+
+  // --- Control State ---
   const [manualControl, setManualControl] = useState(false);
-  const wsRef = useRef(null);
   const controlWsRef = useRef(null);
   const canvasRef = useRef(null);
+
+  // --- Media Modal State ---
+  const [viewingImage, setViewingImage] = useState(null);
+  const [playingVideo, setPlayingVideo] = useState(null);
 
   // 1. Initialization: Find Profile and Server
   useEffect(() => {
@@ -3458,20 +3605,24 @@ function Monitoring() {
       loadCurrentScreenshot();
       loadMetrics();
       loadMedia();
-    }, 2000);
+      syncUrl();
+    }, 3000); // Poll every 3 seconds
 
     return () => clearInterval(interval);
   }, [server, profile]);
 
-  // 3. Manual Control WebSocket
+  // 3. Manual Control WebSocket Lifecycle
   useEffect(() => {
-    if (manualControl) {
+    if (manualControl && server && profile) {
       startManualControl();
     } else {
       stopManualControl();
     }
+    // Cleanup on unmount
     return () => stopManualControl();
-  }, [manualControl]);
+  }, [manualControl, server, profile]);
+
+  // --- Data Loaders ---
 
   const loadCurrentScreenshot = async () => {
     if (!server || !profile) return;
@@ -3479,7 +3630,7 @@ function Monitoring() {
       const url = await apiClient.getScreenshot(server.id, profile.id);
       setScreenshot(url);
     } catch (e) {
-      console.error("Screenshot fetch failed", e);
+      // Silent fail for polling
     }
   };
 
@@ -3491,56 +3642,107 @@ function Monitoring() {
     } catch (e) {}
   };
 
+  // FIX: Fetch media as Blob to support Auth Headers for thumbnails
   const loadMedia = async () => {
     if (!server || !profile) return;
     try {
-      const ss = await apiClient.listScreenshots(server.id, profile.id);
-      setScreenshots(ss);
-      const vids = await apiClient.listVideos(server.id, profile.id);
-      setVideos(vids);
+      const client = apiClient.getClient(server.id);
+
+      // 1. Screenshots - Fetch List
+      const ssRes = await client.get(`/profiles/${profile.id}/screenshots`);
+      const ssData = ssRes.data.screenshots || [];
+
+      // 2. Create Blob URLs for Screenshots (Thumbnails)
+      // This prevents broken images due to Auth headers required on <img> src
+      const ssWithBlobs = await Promise.all(
+        ssData.map(async (ss) => {
+          try {
+            const resp = await client.get(ss.url, { responseType: "blob" });
+            return { ...ss, blobUrl: URL.createObjectURL(resp.data) };
+          } catch {
+            return { ...ss, blobUrl: null };
+          }
+        }),
+      );
+      setScreenshots(ssWithBlobs);
+
+      // 3. Videos - Fetch List Only (Metadata)
+      // We do not download video files for the list, just metadata.
+      const vidRes = await client.get(`/profiles/${profile.id}/videos`);
+      setVideos(vidRes.data.videos || []);
+    } catch (e) {
+      console.error("Failed to load media", e);
+    }
+  };
+
+  // FIX: Sync URL from Server
+  const syncUrl = async () => {
+    if (!server || !profile) return;
+    try {
+      const data = await apiClient.getProfile(server.id, profile.id);
+      if (data.current_url) {
+        setUrlInput(data.current_url);
+      }
     } catch (e) {}
+  };
+
+  // --- Navigation Actions ---
+
+  const handleNavigate = async (e) => {
+    if (e) e.preventDefault();
+    if (!server || !profile || !urlInput) return;
+    try {
+      let url = urlInput;
+      // Auto-prefix protocol
+      if (!url.startsWith("http://") && !url.startsWith("https://")) {
+        url = "https://" + url;
+      }
+      await apiClient.navigateTo(server.id, profile.id, url);
+      setUrlInput(url); // Update with normalized URL
+    } catch (err) {
+      alert(
+        "Navigation failed: " + (err.response?.data?.detail || err.message),
+      );
+    }
+  };
+
+  const handleRefresh = async () => {
+    if (!server || !profile) return;
+    try {
+      await apiClient.refreshPage(server.id, profile.id);
+    } catch (err) {}
+  };
+
+  const handleBack = async () => {
+    if (!server || !profile) return;
+    try {
+      await apiClient.goBack(server.id, profile.id);
+    } catch (err) {}
   };
 
   const takeScreenshot = async () => {
     if (!server || !profile) return;
     try {
       await apiClient.takeScreenshot(server.id, profile.id);
-      loadMedia();
-      alert("Screenshot saved!");
+      loadMedia(); // Refresh list
     } catch (error) {
-      alert("Failed: " + error.message);
+      alert("Failed to take screenshot: " + error.message);
     }
   };
 
-  const handleDownloadVideo = async (vid) => {
-    if (!server) return;
-    try {
-      // We must fetch as blob with auth headers to download protected videos
-      const response = await apiClient.getClient(server.id).get(vid.url, {
-        responseType: "blob",
-      });
-      const url = window.URL.createObjectURL(response.data);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${profile.name}_${vid.id}.webm`;
-      a.click();
-      window.URL.revokeObjectURL(url);
-    } catch (e) {
-      console.error("Download failed", e);
-    }
-  };
+  // --- Manual Control Logic ---
 
   const startManualControl = () => {
     if (!server || !profile) return;
-    const url = apiClient.getControlUrl(server.id, profile.id);
-    controlWsRef.current = new WebSocket(url);
+    const wsUrl = apiClient.getControlUrl(server.id, profile.id);
+    if (!wsUrl) return;
 
+    controlWsRef.current = new WebSocket(wsUrl);
     controlWsRef.current.onopen = () => {
       console.log("Manual control connected");
     };
-
-    controlWsRef.current.onerror = (error) => {
-      console.error("Control WebSocket error:", error);
+    controlWsRef.current.onerror = (err) => {
+      console.error("Control error", err);
       setManualControl(false);
     };
   };
@@ -3561,32 +3763,89 @@ function Monitoring() {
     }
   };
 
+  // FIX: Robust Coordinate Mapping
+  const getCoords = (e) => {
+    if (!canvasRef.current) return { x: 0, y: 0 };
+
+    // Use the image element for bounds if possible, fallback to container
+    // This ensures clicks are accurate even with letterboxing (object-contain)
+    const img = canvasRef.current.querySelector("img");
+    const target = img || canvasRef.current;
+
+    const rect = target.getBoundingClientRect();
+
+    // Calculate scale
+    const scaleX = 1920 / rect.width;
+    const scaleY = 1080 / rect.height;
+
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+
+    return { x, y };
+  };
+
   const handleMouseMove = (e) => {
-    if (!manualControl || !canvasRef.current) return;
-
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (1920 / rect.width);
-    const y = (e.clientY - rect.top) * (1080 / rect.height);
-
+    if (!manualControl) return;
+    const { x, y } = getCoords(e);
     sendControlAction({ type: "mouse_move", x, y });
   };
 
   const handleClick = (e) => {
-    if (!manualControl || !canvasRef.current) return;
-
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (1920 / rect.width);
-    const y = (e.clientY - rect.top) * (1080 / rect.height);
-
+    if (!manualControl) return;
+    const { x, y } = getCoords(e);
     sendControlAction({ type: "mouse_click", x, y, button: "left" });
   };
 
-  const handleKeyPress = (e) => {
+  const handleKeyDown = (e) => {
     if (!manualControl) return;
-    sendControlAction({ type: "keyboard", text: e.key });
+    // Map special keys for the server
+    const keyMap = {
+      " ": "Space",
+      ArrowUp: "ArrowUp",
+      ArrowDown: "ArrowDown",
+      ArrowLeft: "ArrowLeft",
+      ArrowRight: "ArrowRight",
+    };
+    const key = keyMap[e.key] || e.key;
+    sendControlAction({ type: "keyboard", text: key });
   };
 
-  // Render States
+  // --- Media Helpers ---
+
+  const handleDownloadMedia = async (url, filename) => {
+    if (!server) return;
+    try {
+      // Fetch as blob with auth headers
+      const response = await apiClient.getClient(server.id).get(url, {
+        responseType: "blob",
+      });
+      const downloadUrl = window.URL.createObjectURL(response.data);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = filename;
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (e) {
+      console.error("Download failed", e);
+      alert("Failed to download media.");
+    }
+  };
+
+  // FIX: Load video as blob when opening player
+  const openVideoPlayer = async (vid) => {
+    if (!server) return;
+    try {
+      const client = apiClient.getClient(server.id);
+      const response = await client.get(vid.url, { responseType: "blob" });
+      const blobUrl = URL.createObjectURL(response.data);
+      setPlayingVideo({ ...vid, blobUrl });
+    } catch (e) {
+      alert("Failed to load video.");
+    }
+  };
+
+  // --- Render ---
+
   if (isLoadingMeta) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -3610,73 +3869,100 @@ function Monitoring() {
 
   return (
     <div className="animate-fade-in flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center mb-4 flex-shrink-0">
-        <button onClick={() => navigate(-1)} className="btn btn-secondary mr-4">
+      {/* Header Bar */}
+      <div className="flex items-center mb-4 flex-shrink-0 gap-2">
+        <button onClick={() => navigate(-1)} className="btn btn-secondary">
           <ArrowLeft className="w-4 h-4" />
         </button>
         <div className="flex-1">
           <h1 className="text-xl font-bold text-white">{profile.name}</h1>
           <p className="text-xs text-dark-400">{profile.id}</p>
         </div>
-        <div className="flex items-center space-x-3">
-          <span className={`status-badge status-${profile.status}`}>
-            {profile.status}
-          </span>
-          <button onClick={takeScreenshot} className="btn btn-primary">
-            <Camera className="w-4 h-4 mr-2" /> Screenshot
+
+        {/* Navigation Controls */}
+        <div className="flex items-center space-x-2 bg-dark-800 p-1 rounded-lg">
+          <button
+            onClick={handleBack}
+            className="p-2 hover:bg-dark-700 rounded text-dark-300 hover:text-white"
+            title="Go Back"
+          >
+            <ArrowLeftCircle className="w-4 h-4" />
           </button>
           <button
-            onClick={() => setManualControl(!manualControl)}
-            className={`btn ${manualControl ? "btn-error" : "btn-success"}`}
+            onClick={handleRefresh}
+            className="p-2 hover:bg-dark-700 rounded text-dark-300 hover:text-white"
+            title="Refresh"
           >
-            {manualControl ? (
-              <>
-                <Square className="w-4 h-4 mr-2" /> Stop Control
-              </>
-            ) : (
-              <>
-                <Play className="w-4 h-4 mr-2" /> Take Control
-              </>
-            )}
+            <RefreshCw className="w-4 h-4" />
           </button>
+          <form onSubmit={handleNavigate} className="flex items-center">
+            <Globe className="w-4 h-4 text-dark-500 mx-2" />
+            <input
+              type="text"
+              value={urlInput}
+              onChange={(e) => setUrlInput(e.target.value)}
+              placeholder="https://google.com"
+              className="bg-dark-900 border-none text-sm text-white rounded px-2 py-1 w-64 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            />
+          </form>
         </div>
+
+        <button onClick={takeScreenshot} className="btn btn-primary ml-2">
+          <Camera className="w-4 h-4 mr-2" /> Screenshot
+        </button>
+
+        <button
+          onClick={() => setManualControl(!manualControl)}
+          className={`btn ${manualControl ? "btn-success" : "btn-secondary"} ml-2`}
+        >
+          {manualControl ? (
+            <>
+              <MousePointer className="w-4 h-4 mr-2" /> Controlling
+            </>
+          ) : (
+            <>
+              <Play className="w-4 h-4 mr-2" /> Take Control
+            </>
+          )}
+        </button>
       </div>
 
       {/* Main Layout */}
       <div className="flex-1 grid grid-cols-3 gap-6 min-h-0">
         {/* Left Column: Live View */}
         <div className="col-span-2 flex flex-col min-h-0">
-          <div className="card flex-1 flex flex-col">
-            <div className="flex justify-between items-center mb-2">
-              <h3 className="font-semibold text-white">Live View</h3>
-              {manualControl && (
-                <span className="text-xs text-success-500 animate-pulse">
-                  ● Manual Control Active
-                </span>
-              )}
-            </div>
+          <div className="card flex-1 flex flex-col relative">
+            <h3 className="font-semibold text-white mb-2">Live View</h3>
+
+            {manualControl && (
+              <div className="absolute top-1 right-1 z-20 bg-success-500/80 text-white text-xs px-2 py-1 rounded animate-pulse pointer-events-none">
+                Control Active - Click or Type to interact
+              </div>
+            )}
+
             <div
               ref={canvasRef}
-              className={`relative flex-1 bg-dark-900 rounded-lg overflow-hidden border border-dark-700 ${
-                manualControl ? "cursor-none" : ""
+              className={`flex-1 bg-dark-900 rounded-lg overflow-hidden relative border border-dark-700 ${
+                manualControl ? "cursor-crosshair" : ""
               }`}
               onMouseMove={handleMouseMove}
               onClick={handleClick}
-              onKeyDown={handleKeyPress}
-              tabIndex={manualControl ? 0 : -1}
+              onKeyDown={handleKeyDown}
+              tabIndex={manualControl ? 0 : -1} // Focus required for keyboard events
             >
               {screenshot ? (
                 <img
                   src={screenshot}
                   alt="Live screen"
                   className="w-full h-full object-contain"
+                  draggable="false"
                 />
               ) : (
                 <div className="flex items-center justify-center h-full text-dark-500">
                   <div className="text-center">
                     <Loader className="w-6 h-6 animate-spin mx-auto mb-2" />
-                    Connecting...
+                    Waiting for screen...
+                    <p className="text-xs mt-1">(Ensure profile is running)</p>
                   </div>
                 </div>
               )}
@@ -3704,9 +3990,7 @@ function Monitoring() {
                     <div
                       className="h-full bg-primary-500 transition-all"
                       style={{
-                        width: `${
-                          (metrics.memory_mb / metrics.memory_limit_mb) * 100
-                        }%`,
+                        width: `${Math.min(100, (metrics.memory_mb / metrics.memory_limit_mb) * 100)}%`,
                       }}
                     />
                   </div>
@@ -3723,7 +4007,9 @@ function Monitoring() {
                   <div className="w-full h-2 bg-dark-700 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-success-500 transition-all"
-                      style={{ width: `${metrics.cpu_percent}%` }}
+                      style={{
+                        width: `${Math.min(100, metrics.cpu_percent)}%`,
+                      }}
                     />
                   </div>
                 </div>
@@ -3740,42 +4026,57 @@ function Monitoring() {
               </span>
             </div>
             <div className="grid grid-cols-3 gap-2">
-              {screenshots.slice(0, 6).map((ss) => (
-                <div
-                  key={ss.id}
-                  className="aspect-video bg-dark-700 rounded overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary-500 transition-all"
-                >
-                  <img
-                    src={ss.url}
-                    alt="Thumb"
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-              ))}
+              {screenshots.slice(0, 6).map((ss) =>
+                ss.blobUrl ? (
+                  <div
+                    key={ss.id}
+                    className="aspect-video bg-dark-700 rounded overflow-hidden relative group cursor-pointer"
+                    onClick={() => setViewingImage(ss.blobUrl)}
+                  >
+                    <img
+                      src={ss.blobUrl}
+                      alt="Thumb"
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDownloadMedia(ss.url, `${ss.id}.png`);
+                        }}
+                        className="p-1 bg-dark-800 rounded hover:bg-primary-600"
+                      >
+                        <Download className="w-4 h-4 text-white" />
+                      </button>
+                    </div>
+                  </div>
+                ) : null,
+              )}
               {screenshots.length === 0 && (
                 <div className="col-span-3 text-center py-4 text-xs text-dark-500">
-                  No screenshots taken yet.
+                  No screenshots yet. Click the button above.
                 </div>
               )}
             </div>
           </div>
 
-          {/* NEW: Videos Gallery */}
+          {/* Videos Gallery */}
           <div className="card flex-shrink-0">
             <div className="flex justify-between items-center mb-3">
-              <h3 className="font-semibold text-white">Recordings</h3>
+              <h3 className="font-semibold text-white">Session Videos</h3>
               <span className="text-xs text-dark-400">{videos.length}</span>
             </div>
             <div className="space-y-2">
               {videos.length === 0 ? (
                 <p className="text-xs text-dark-500 text-center py-4">
-                  Recordings are saved automatically while running.
+                  Videos are recorded automatically.
                 </p>
               ) : (
                 videos.slice(0, 4).map((vid) => (
                   <div
                     key={vid.id}
-                    className="flex items-center justify-between p-2 bg-dark-700 rounded hover:bg-dark-600 transition-colors"
+                    className="flex items-center justify-between p-2 bg-dark-700 rounded hover:bg-dark-600 transition-colors cursor-pointer"
+                    onClick={() => openVideoPlayer(vid)}
                   >
                     <div className="flex items-center space-x-2">
                       <Video className="w-4 h-4 text-primary-400" />
@@ -3784,7 +4085,10 @@ function Monitoring() {
                       </span>
                     </div>
                     <button
-                      onClick={() => handleDownloadVideo(vid)}
+                      onClick={(e) => {
+                        e.stopPropagation(); // Prevent opening player
+                        handleDownloadMedia(vid.url, `${vid.id}.webm`);
+                      }}
                       className="btn btn-xs btn-secondary"
                     >
                       <Download className="w-3 h-3" />
@@ -3794,35 +4098,96 @@ function Monitoring() {
               )}
             </div>
           </div>
+        </div>
+      </div>
 
-          {/* Logs (Preserved from original) */}
-          <div className="card flex-shrink-0">
-            <h3 className="font-semibold text-white mb-4">Logs</h3>
-            <div className="space-y-2 max-h-96 overflow-y-auto font-mono text-xs">
-              {logs.length === 0 ? (
-                <p className="text-dark-500">No logs yet</p>
-              ) : (
-                logs.map((log, i) => (
-                  <div key={i} className="text-dark-300">
-                    <span className="text-dark-500">{log.timestamp}</span>{" "}
-                    <span
-                      className={`${
-                        log.level === "error"
-                          ? "text-error-500"
-                          : log.level === "warning"
-                            ? "text-warning-500"
-                            : "text-dark-300"
-                      }`}
-                    >
-                      {log.message}
-                    </span>
-                  </div>
-                ))
-              )}
+      {/* --- Modals --- */}
+
+      {/* Image Viewer Modal */}
+      {viewingImage && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-8"
+          onClick={() => setViewingImage(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white hover:text-primary-400 transition-colors"
+            onClick={() => setViewingImage(null)}
+          >
+            <X className="w-8 h-8" />
+          </button>
+          <img
+            src={viewingImage}
+            alt="Screenshot"
+            className="max-w-full max-h-full object-contain shadow-2xl rounded"
+          />
+        </div>
+      )}
+
+      {/* Video Player Modal */}
+      {playingVideo && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-8"
+          onClick={() => {
+            URL.revokeObjectURL(playingVideo.blobUrl);
+            setPlayingVideo(null);
+          }}
+        >
+          <div
+            className="bg-dark-900 rounded-lg p-4 w-full max-w-4xl shadow-2xl"
+            onClick={(e) => e.stopPropagation()} // Prevent closing when clicking inside video
+          >
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="text-white font-medium">Recording Playback</h3>
+              <button
+                onClick={() => {
+                  URL.revokeObjectURL(playingVideo.blobUrl);
+                  setPlayingVideo(null);
+                }}
+                className="text-dark-400 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            {playingVideo.blobUrl ? (
+              <video
+                controls
+                autoPlay
+                className="w-full bg-black rounded"
+                src={playingVideo.blobUrl}
+              >
+                Your browser does not support the video tag.
+              </video>
+            ) : (
+              <div className="text-center text-white py-10">
+                Loading video...
+              </div>
+            )}
+            <div className="flex justify-end mt-3 gap-2">
+              <button
+                onClick={() =>
+                  handleDownloadMedia(
+                    playingVideo.url,
+                    `${playingVideo.id}.webm`,
+                  )
+                }
+                className="btn btn-sm btn-primary"
+              >
+                <Download className="w-3 h-3 mr-2" />
+                Download Video
+              </button>
+              <button
+                onClick={() => {
+                  URL.revokeObjectURL(playingVideo.blobUrl);
+                  setPlayingVideo(null);
+                }}
+                className="btn btn-sm btn-secondary"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -6528,6 +6893,43 @@ class BrowserFarmClient {
   }
 
   // -----------------------------------------------------------
+  // Navigation (NEW)
+  // -----------------------------------------------------------
+
+  /**
+   * Navigate the profile's browser to a specific URL.
+   */
+  async navigateTo(serverId, profileId, url) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post(
+      `/profiles/${profileId}/navigate`,
+      null,
+      {
+        params: { url: url },
+      },
+    );
+    return data;
+  }
+
+  /**
+   * Refresh the current page.
+   */
+  async refreshPage(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post(`/profiles/${profileId}/refresh`);
+    return data;
+  }
+
+  /**
+   * Go back in history.
+   */
+  async goBack(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post(`/profiles/${profileId}/go_back`);
+    return data;
+  }
+
+  // -----------------------------------------------------------
   // Screenshots
   // -----------------------------------------------------------
 
@@ -6552,7 +6954,7 @@ class BrowserFarmClient {
   }
 
   // -----------------------------------------------------------
-  // Videos (NEW)
+  // Videos
   // -----------------------------------------------------------
 
   async listVideos(serverId, profileId) {
@@ -6610,16 +7012,11 @@ class BrowserFarmClient {
   }
 
   /**
-   * NEW: Record that an account is using a specific proxy for a specific website.
+   * Record that an account is using a specific proxy for a specific website.
    * Used for enforcing "1 Account per Website per Proxy" compliance.
    */
   async recordProxyHistory(serverId, accountId, proxyId, website) {
     const client = this.getClient(serverId);
-    // Sending as query params or body depending on server implementation.
-    // Server expects query params based on the endpoint defined:
-    // @app.post("/history/record")
-    // async def record_proxy_history(account_id: str, proxy_id: str, website: str, ...)
-    // Note: FastAPI with query params needs them passed in the URL or config.
     const { data } = await client.post(`/history/record`, null, {
       params: {
         account_id: accountId,

@@ -13,7 +13,6 @@ import {
   Globe,
   X,
   Play,
-  Square,
   MousePointer,
 } from "lucide-react";
 import { apiClient } from "../api/client";
@@ -106,7 +105,8 @@ function Monitoring() {
       loadCurrentScreenshot();
       loadMetrics();
       loadMedia();
-    }, 2000);
+      syncUrl();
+    }, 3000); // Poll every 3 seconds
 
     return () => clearInterval(interval);
   }, [server, profile]);
@@ -142,13 +142,47 @@ function Monitoring() {
     } catch (e) {}
   };
 
+  // FIX: Fetch media as Blob to support Auth Headers for thumbnails
   const loadMedia = async () => {
     if (!server || !profile) return;
     try {
-      const ss = await apiClient.listScreenshots(server.id, profile.id);
-      setScreenshots(ss);
-      const vids = await apiClient.listVideos(server.id, profile.id);
-      setVideos(vids);
+      const client = apiClient.getClient(server.id);
+
+      // 1. Screenshots - Fetch List
+      const ssRes = await client.get(`/profiles/${profile.id}/screenshots`);
+      const ssData = ssRes.data.screenshots || [];
+
+      // 2. Create Blob URLs for Screenshots (Thumbnails)
+      // This prevents broken images due to Auth headers required on <img> src
+      const ssWithBlobs = await Promise.all(
+        ssData.map(async (ss) => {
+          try {
+            const resp = await client.get(ss.url, { responseType: "blob" });
+            return { ...ss, blobUrl: URL.createObjectURL(resp.data) };
+          } catch {
+            return { ...ss, blobUrl: null };
+          }
+        }),
+      );
+      setScreenshots(ssWithBlobs);
+
+      // 3. Videos - Fetch List Only (Metadata)
+      // We do not download video files for the list, just metadata.
+      const vidRes = await client.get(`/profiles/${profile.id}/videos`);
+      setVideos(vidRes.data.videos || []);
+    } catch (e) {
+      console.error("Failed to load media", e);
+    }
+  };
+
+  // FIX: Sync URL from Server
+  const syncUrl = async () => {
+    if (!server || !profile) return;
+    try {
+      const data = await apiClient.getProfile(server.id, profile.id);
+      if (data.current_url) {
+        setUrlInput(data.current_url);
+      }
     } catch (e) {}
   };
 
@@ -166,7 +200,9 @@ function Monitoring() {
       await apiClient.navigateTo(server.id, profile.id, url);
       setUrlInput(url); // Update with normalized URL
     } catch (err) {
-      alert("Navigation failed: " + (err.response?.data?.detail || err.message));
+      alert(
+        "Navigation failed: " + (err.response?.data?.detail || err.message),
+      );
     }
   };
 
@@ -219,26 +255,44 @@ function Monitoring() {
   };
 
   const sendControlAction = (action) => {
-    if (controlWsRef.current && controlWsRef.current.readyState === WebSocket.OPEN) {
+    if (
+      controlWsRef.current &&
+      controlWsRef.current.readyState === WebSocket.OPEN
+    ) {
       controlWsRef.current.send(JSON.stringify(action));
     }
   };
 
+  // FIX: Robust Coordinate Mapping
+  const getCoords = (e) => {
+    if (!canvasRef.current) return { x: 0, y: 0 };
+
+    // Use the image element for bounds if possible, fallback to container
+    // This ensures clicks are accurate even with letterboxing (object-contain)
+    const img = canvasRef.current.querySelector("img");
+    const target = img || canvasRef.current;
+
+    const rect = target.getBoundingClientRect();
+
+    // Calculate scale
+    const scaleX = 1920 / rect.width;
+    const scaleY = 1080 / rect.height;
+
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+
+    return { x, y };
+  };
+
   const handleMouseMove = (e) => {
-    if (!manualControl || !canvasRef.current) return;
-    const rect = canvasRef.current.getBoundingClientRect();
-    // Scale coordinates to match 1920x1080 canvas on the server
-    const x = Math.round((e.clientX - rect.left) * (1920 / rect.width));
-    const y = Math.round((e.clientY - rect.top) * (1080 / rect.height));
+    if (!manualControl) return;
+    const { x, y } = getCoords(e);
     sendControlAction({ type: "mouse_move", x, y });
   };
 
   const handleClick = (e) => {
-    if (!manualControl || !canvasRef.current) return;
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = Math.round((e.clientX - rect.left) * (1920 / rect.width));
-    const y = Math.round((e.clientY - rect.top) * (1080 / rect.height));
-    // Send click
+    if (!manualControl) return;
+    const { x, y } = getCoords(e);
     sendControlAction({ type: "mouse_click", x, y, button: "left" });
   };
 
@@ -247,10 +301,10 @@ function Monitoring() {
     // Map special keys for the server
     const keyMap = {
       " ": "Space",
-      "ArrowUp": "ArrowUp",
-      "ArrowDown": "ArrowDown",
-      "ArrowLeft": "ArrowLeft",
-      "ArrowRight": "ArrowRight",
+      ArrowUp: "ArrowUp",
+      ArrowDown: "ArrowDown",
+      ArrowLeft: "ArrowLeft",
+      ArrowRight: "ArrowRight",
     };
     const key = keyMap[e.key] || e.key;
     sendControlAction({ type: "keyboard", text: key });
@@ -274,6 +328,19 @@ function Monitoring() {
     } catch (e) {
       console.error("Download failed", e);
       alert("Failed to download media.");
+    }
+  };
+
+  // FIX: Load video as blob when opening player
+  const openVideoPlayer = async (vid) => {
+    if (!server) return;
+    try {
+      const client = apiClient.getClient(server.id);
+      const response = await client.get(vid.url, { responseType: "blob" });
+      const blobUrl = URL.createObjectURL(response.data);
+      setPlayingVideo({ ...vid, blobUrl });
+    } catch (e) {
+      alert("Failed to load video.");
     }
   };
 
@@ -312,12 +379,20 @@ function Monitoring() {
           <p className="text-xs text-dark-400">{profile.id}</p>
         </div>
 
-        {/* NEW: Navigation Controls */}
+        {/* Navigation Controls */}
         <div className="flex items-center space-x-2 bg-dark-800 p-1 rounded-lg">
-          <button onClick={handleBack} className="p-2 hover:bg-dark-700 rounded text-dark-300 hover:text-white" title="Go Back">
+          <button
+            onClick={handleBack}
+            className="p-2 hover:bg-dark-700 rounded text-dark-300 hover:text-white"
+            title="Go Back"
+          >
             <ArrowLeftCircle className="w-4 h-4" />
           </button>
-          <button onClick={handleRefresh} className="p-2 hover:bg-dark-700 rounded text-dark-300 hover:text-white" title="Refresh">
+          <button
+            onClick={handleRefresh}
+            className="p-2 hover:bg-dark-700 rounded text-dark-300 hover:text-white"
+            title="Refresh"
+          >
             <RefreshCw className="w-4 h-4" />
           </button>
           <form onSubmit={handleNavigate} className="flex items-center">
@@ -360,7 +435,7 @@ function Monitoring() {
             <h3 className="font-semibold text-white mb-2">Live View</h3>
 
             {manualControl && (
-              <div className="absolute top-1 right-1 z-20 bg-success-500/80 text-white text-xs px-2 py-1 rounded animate-pulse">
+              <div className="absolute top-1 right-1 z-20 bg-success-500/80 text-white text-xs px-2 py-1 rounded animate-pulse pointer-events-none">
                 Control Active - Click or Type to interact
               </div>
             )}
@@ -397,7 +472,6 @@ function Monitoring() {
 
         {/* Right Column: Metrics & Media */}
         <div className="flex flex-col space-y-4 min-h-0 overflow-y-auto pr-2">
-
           {/* Metrics */}
           {metrics && (
             <div className="card flex-shrink-0">
@@ -433,7 +507,9 @@ function Monitoring() {
                   <div className="w-full h-2 bg-dark-700 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-success-500 transition-all"
-                      style={{ width: `${Math.min(100, metrics.cpu_percent)}%` }}
+                      style={{
+                        width: `${Math.min(100, metrics.cpu_percent)}%`,
+                      }}
                     />
                   </div>
                 </div>
@@ -445,34 +521,37 @@ function Monitoring() {
           <div className="card flex-shrink-0">
             <div className="flex justify-between items-center mb-3">
               <h3 className="font-semibold text-white">Screenshots</h3>
-              <span className="text-xs text-dark-400">{screenshots.length}</span>
+              <span className="text-xs text-dark-400">
+                {screenshots.length}
+              </span>
             </div>
             <div className="grid grid-cols-3 gap-2">
-              {screenshots.slice(0, 6).map((ss) => (
-                <div
-                  key={ss.id}
-                  className="aspect-video bg-dark-700 rounded overflow-hidden relative group cursor-pointer"
-                  onClick={() => setViewingImage(ss.url)}
-                >
-                  <img
-                    src={ss.url}
-                    alt="Thumb"
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all gap-2">
-                    {/* Stop propagation so clicking download doesn't open viewer */}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleDownloadMedia(ss.url, `${ss.id}.png`); }}
-                      className="p-1 bg-dark-800 rounded hover:bg-primary-600"
-                    >
+              {screenshots.slice(0, 6).map((ss) =>
+                ss.blobUrl ? (
+                  <div
+                    key={ss.id}
+                    className="aspect-video bg-dark-700 rounded overflow-hidden relative group cursor-pointer"
+                    onClick={() => setViewingImage(ss.blobUrl)}
+                  >
+                    <img
+                      src={ss.blobUrl}
+                      alt="Thumb"
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDownloadMedia(ss.url, `${ss.id}.png`);
+                        }}
+                        className="p-1 bg-dark-800 rounded hover:bg-primary-600"
+                      >
                         <Download className="w-4 h-4 text-white" />
-                    </button>
-                    <button className="p-1 bg-dark-800 rounded hover:bg-primary-600">
-                        <Square className="w-4 h-4 text-white" />
-                    </button>
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ) : null,
+              )}
               {screenshots.length === 0 && (
                 <div className="col-span-3 text-center py-4 text-xs text-dark-500">
                   No screenshots yet. Click the button above.
@@ -497,7 +576,7 @@ function Monitoring() {
                   <div
                     key={vid.id}
                     className="flex items-center justify-between p-2 bg-dark-700 rounded hover:bg-dark-600 transition-colors cursor-pointer"
-                    onClick={() => setPlayingVideo(vid)}
+                    onClick={() => openVideoPlayer(vid)}
                   >
                     <div className="flex items-center space-x-2">
                       <Video className="w-4 h-4 text-primary-400" />
@@ -548,43 +627,63 @@ function Monitoring() {
       {playingVideo && (
         <div
           className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-8"
-          onClick={() => setPlayingVideo(null)}
+          onClick={() => {
+            URL.revokeObjectURL(playingVideo.blobUrl);
+            setPlayingVideo(null);
+          }}
         >
           <div
             className="bg-dark-900 rounded-lg p-4 w-full max-w-4xl shadow-2xl"
-            onClick={e => e.stopPropagation()} // Prevent closing when clicking inside video
+            onClick={(e) => e.stopPropagation()} // Prevent closing when clicking inside video
           >
             <div className="flex justify-between items-center mb-2">
-                <h3 className="text-white font-medium">Recording Playback</h3>
-                <button
-                    onClick={() => setPlayingVideo(null)}
-                    className="text-dark-400 hover:text-white transition-colors"
-                >
-                    <X className="w-5 h-5" />
-                </button>
+              <h3 className="text-white font-medium">Recording Playback</h3>
+              <button
+                onClick={() => {
+                  URL.revokeObjectURL(playingVideo.blobUrl);
+                  setPlayingVideo(null);
+                }}
+                className="text-dark-400 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
-            <video
-              controls
-              autoPlay
-              className="w-full bg-black rounded"
-              src={playingVideo.url}
-            >
-              Your browser does not support the video tag.
-            </video>
+            {playingVideo.blobUrl ? (
+              <video
+                controls
+                autoPlay
+                className="w-full bg-black rounded"
+                src={playingVideo.blobUrl}
+              >
+                Your browser does not support the video tag.
+              </video>
+            ) : (
+              <div className="text-center text-white py-10">
+                Loading video...
+              </div>
+            )}
             <div className="flex justify-end mt-3 gap-2">
-                <button
-                    onClick={() => handleDownloadMedia(playingVideo.url, `${playingVideo.id}.webm`)}
-                    className="btn btn-sm btn-primary"
-                >
-                    <Download className="w-3 h-3 mr-2" />
-                    Download Video
-                </button>
-                <button
-                    onClick={() => setPlayingVideo(null)}
-                    className="btn btn-sm btn-secondary"
-                >
-                    Close
-                </button>
+              <button
+                onClick={() =>
+                  handleDownloadMedia(
+                    playingVideo.url,
+                    `${playingVideo.id}.webm`,
+                  )
+                }
+                className="btn btn-sm btn-primary"
+              >
+                <Download className="w-3 h-3 mr-2" />
+                Download Video
+              </button>
+              <button
+                onClick={() => {
+                  URL.revokeObjectURL(playingVideo.blobUrl);
+                  setPlayingVideo(null);
+                }}
+                className="btn btn-sm btn-secondary"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

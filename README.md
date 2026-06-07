@@ -13,12 +13,12 @@ A distributed browser automation platform for developers. Manage multiple browse
 - 📚 **Script Library** - Centralized database for modular, reusable scripts
 - 🔗 **Script Chaining** - Execute multiple scripts in sequence within a single profile
 - 📺 **Live Screen Viewing** - Real-time browser screen streaming
-- 🎮 **Manual Control** - Take over any browser context with mouse/keyboard
+- 🎮 **System-Level Control** - Take over any browser context with hardware-level mouse/keyboard input (PyAutoGUI/Xdotool) including Drag & Drop.
 - 🧠 **Command Center** - Dedicated orchestrator profiles to coordinate your farm
 - 🔗 **Inter-Profile Communication** - Shared state API for profile coordination
-- 🖱️ **Human-like Automation** - Native PyAutoGUI support via isolated virtual displays
-- 🕵️ **Anti-Detection** - Automatic injection of stealth scripts to hide automation flags
-- 📸 **Screenshots & Videos** - Automatic capture and gallery viewing
+- 🖱️ **Human-like Automation** - Native PyAutoGUI support via isolated virtual displays with Bezier curve movement generation.
+- 🕵️ **Advanced Anti-Detection** - TLS Fingerprinting (Genuine Chrome), Persistent Profiles, Coherent Hardware Spoofing, and WebGL masking.
+- 📸 **Screenshots & Videos** - Automatic capture and gallery viewing with FFmpeg-powered Start/Stop recording controls.
 - 📊 **Resource Monitoring** - Non-blocking memory, CPU, and network metrics per context
 - 🔄 **Auto-Dependency Install** - Scripts can define requirements installed at runtime
 - 🚑 **Crash Recovery** - Automatic detection and state reconciliation of ghost profiles on server restart
@@ -32,8 +32,9 @@ Server (Python + FastAPI + Playwright)
     ↓ State & Persistence
 PostgreSQL Database
     ↓ Isolated Xvfb Display Per Profile
-Chromium Browser (Stealth Injected)
-    ↓ Script Chain Execution
+Google Chrome (Persistent Context & TLS Fingerprinted)
+    ↓ System-Level Input (PyAutoGUI/Xdotool)
+    ↓ FFmpeg Recording Capture
 Your Custom Scripts (Playwright + PyAutoGUI)
 ```
 
@@ -42,13 +43,23 @@ Your Custom Scripts (Playwright + PyAutoGUI)
 ### Prerequisites
 
 1.  **PostgreSQL Database**: You need a running PostgreSQL instance.
-2.  **System Dependencies**: Xvfb, Chromium, and Python build tools.
+2.  **System Dependencies**: Xvfb, Google Chrome (for TLS compliance), FFmpeg, and Python build tools.
 
 ### Step 1: System Dependencies
 
 ```bash
 sudo apt update
-sudo apt install -y python3.10-venv python3-pip xvfb chromium-browser postgresql postgresql-contrib libpq-dev x11-utils
+# Install Python, DB tools, and X11 utilities
+sudo apt install -y python3.10-venv python3-pip xvfb postgresql postgresql-contrib libpq-dev x11-utils ffmpeg
+
+# Install Genuine Google Chrome (Required for TLS Fingerprinting)
+wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+sudo apt update
+sudo apt install -y google-chrome-stable
+
+# Install Fonts for Fingerprint Consistency (Optional but recommended)
+sudo apt install -y fonts-liberation fonts-noto-color-emoji
 ```
 
 ### Step 2: Database Setup
@@ -85,8 +96,8 @@ source venv/bin/activate
 # Install from PyPI
 pip install browser-farm
 
-# Install Playwright browsers
-playwright install chromium
+# Note: We no longer use 'playwright install chromium'
+# The server now launches the system-installed Google Chrome binary.
 ```
 
 ### Step 4: Configuration (Environment Variables)
@@ -228,6 +239,7 @@ npm run dist
 6. **Monitor:**
    - Go to Home to see live screens.
    - Click "Take Control" for manual operation.
+   - Use **Start/Stop Recording** buttons to capture sessions.
 
 ## Writing Scripts
 
@@ -236,13 +248,13 @@ Scripts are standard Python using Playwright. The server injects powerful helper
 ### Injected Namespace
 
 You have access to these objects/functions without importing them:
-- `context`: The Playwright BrowserContext.
+- `context`: The Playwright BrowserContext (Persistent).
 - `page`: Helper to get the current active page.
 - `accounts`: Dictionary of all accounts attached to this profile.
 - `get_account(account_id)`: Retrieve credentials from your vault.
 - `get_state(key)`: Retrieve shared state from the Orchestrator.
 - `set_state(key, value)`: Set shared state for other profiles.
-- `pyautogui`: The PyAutoGUI library (controls the mouse on the profile's dedicated virtual display).
+- `pyautogui`: The PyAutoGUI library (controls the mouse on the profile's dedicated virtual display). **Note:** This moves the OS-level mouse on the Xvfb display, ensuring trusted input events.
 - `BeautifulSoup`: For HTML parsing.
 
 ### Dependencies
@@ -291,6 +303,7 @@ async def main(context):
 ```python
 import asyncio
 import pyautogui
+import random
 
 async def main(context):
     page = await context.new_page()
@@ -304,8 +317,15 @@ async def main(context):
         center_x = box['x'] + box['width'] / 2
         center_y = box['y'] + box['height'] / 2
 
-        # Move mouse human-like
-        pyautogui.moveTo(center_x, center_y, duration=1.0)
+        # Move mouse human-like with Bezier curves
+        # duration: random time between 0.5 and 1.5 seconds
+        # easeInOutQuad: smooth acceleration/deceleration
+        pyautogui.moveTo(
+            center_x,
+            center_y,
+            duration=random.uniform(0.5, 1.5),
+            tween=pyautogui.easeInOutQuad
+        )
         pyautogui.click()
 
     await asyncio.sleep(5)
@@ -322,7 +342,7 @@ See [API.md](./API.md) for full API reference.
 - PostgreSQL 12+
 - 4GB RAM minimum (8GB recommended)
 - 2 CPU cores minimum
-- 10GB disk space
+- 10GB disk space (plus space for persistent browser profiles/videos)
 
 ### Client
 - Windows 10+, macOS 11+, or Linux
@@ -371,5 +391,8 @@ MIT License - see [LICENSE](./LICENSE)
 - [x] PyAutoGUI Support
 - [x] PostgreSQL Persistence
 - [x] Proxy History Tracking
+- [x] TLS Fingerprinting (Genuine Chrome)
+- [x] System-Level Input (Xdotool)
+- [x] Persistent Browser Profiles
 - [ ] Docker support
 - [ ] LLM Orchestrator Integration
