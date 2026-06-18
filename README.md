@@ -12,30 +12,33 @@ A distributed browser automation platform for developers. Manage multiple browse
 - 🤖 **Flexible Profile Modes** - Manual, Automated, or Command Center (Orchestrator) profiles
 - 📚 **Script Library** - Centralized database for modular, reusable scripts
 - 🔗 **Script Chaining** - Execute multiple scripts in sequence within a single profile
-- 📺 **Live Screen Viewing** - Real-time browser screen streaming
-- 🎮 **System-Level Control** - Take over any browser context with hardware-level mouse/keyboard input (PyAutoGUI/Xdotool) including Drag & Drop.
+- 📺 **Live Screen Viewing** - Real-time browser screen streaming with optimized, non-blocking polling
+- 🎮 **System-Level Control** - Take over any browser context with hardware-level mouse/keyboard input via Xdotool. Fully supports Drag & Drop, Right-Click, and Keyboard Modifiers.
+- 👻 **Ghost Trail Visualization** - Batched mouse movement rendering with an SVG ghost cursor to visualize input curves for anti-detection.
 - 🧠 **Command Center** - Dedicated orchestrator profiles to coordinate your farm
 - 🔗 **Inter-Profile Communication** - Shared state API for profile coordination
 - 🖱️ **Human-like Automation** - Native PyAutoGUI support via isolated virtual displays with Bezier curve movement generation.
-- 🕵️ **Advanced Anti-Detection** - TLS Fingerprinting (Genuine Chrome), Persistent Profiles, Coherent Hardware Spoofing, and WebGL masking.
-- 📸 **Screenshots & Videos** - Automatic capture and gallery viewing with FFmpeg-powered Start/Stop recording controls.
+- 🕵️ **Advanced Anti-Detection** - Dual-engine support (Chromium or Genuine Chrome for TLS fingerprinting), Persistent Browser Profiles, Coherent Hardware Spoofing (WebGL, CPU, RAM), and robust stealth injection.
+- 📸 **Screenshots & Videos** - Automatic capture and gallery viewing with FFmpeg-powered Start/Stop recording controls and live duration tracking.
+- 🗑️ **Media Management** - Delete screenshots and videos directly from the client gallery.
 - 📊 **Resource Monitoring** - Non-blocking memory, CPU, and network metrics per context
 - 🔄 **Auto-Dependency Install** - Scripts can define requirements installed at runtime
 - 🚑 **Crash Recovery** - Automatic detection and state reconciliation of ghost profiles on server restart
 
 ## Architecture
 
-```
+```text
 Desktop App (Electron + React)
-    ↓ Management & Configuration
+    ↓ Management & Configuration (Batched WebSocket Input)
 Server (Python + FastAPI + Playwright)
     ↓ State & Persistence
 PostgreSQL Database
-    ↓ Isolated Xvfb Display Per Profile
-Google Chrome (Persistent Context & TLS Fingerprinted)
-    ↓ System-Level Input (PyAutoGUI/Xdotool)
-    ↓ FFmpeg Recording Capture
-Your Custom Scripts (Playwright + PyAutoGUI)
+    ↓ Isolated Xvfb Display Per Profile (--window-position=0,0)
+Browser Engine (Genuine Chrome OR Bundled Chromium)
+    ↓ Persistent Context (Aging cookies/localStorage)
+    ↓ System-Level Input (PyAutoGUI/Xdotool targeting $DISPLAY)
+    ↓ FFmpeg Subprocess Capture
+Your Custom Scripts (Playwright + PyAutoGUI + Human Helpers)
 ```
 
 ## Installation
@@ -43,23 +46,23 @@ Your Custom Scripts (Playwright + PyAutoGUI)
 ### Prerequisites
 
 1.  **PostgreSQL Database**: You need a running PostgreSQL instance.
-2.  **System Dependencies**: Xvfb, Google Chrome (for TLS compliance), FFmpeg, and Python build tools.
+2.  **System Dependencies**: Xvfb, Xdotool, FFmpeg, Google Chrome (optional but recommended for TLS), Fonts, and Python build tools.
 
 ### Step 1: System Dependencies
 
 ```bash
 sudo apt update
-# Install Python, DB tools, and X11 utilities
-sudo apt install -y python3.10-venv python3-pip xvfb postgresql postgresql-contrib libpq-dev x11-utils ffmpeg
+# Install Python, DB tools, X11 utilities, and FFmpeg
+sudo apt install -y python3.10-venv python3-pip xvfb xdotool ffmpeg postgresql postgresql-contrib libpq-dev x11-utils
 
-# Install Genuine Google Chrome (Required for TLS Fingerprinting)
+# Install Genuine Google Chrome (Required for TLS Fingerprinting / High-Trust mode)
 wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
 echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
 sudo apt update
 sudo apt install -y google-chrome-stable
 
-# Install Fonts for Fingerprint Consistency (Optional but recommended)
-sudo apt install -y fonts-liberation fonts-noto-color-emoji
+# Install Fonts for Fingerprint Consistency (Prevents font mismatch detection)
+sudo apt install -y fonts-liberation fonts-noto-color-emoji fonts-noto-cjk
 ```
 
 ### Step 2: Database Setup
@@ -96,8 +99,9 @@ source venv/bin/activate
 # Install from PyPI
 pip install browser-farm
 
-# Note: We no longer use 'playwright install chromium'
-# The server now launches the system-installed Google Chrome binary.
+# Note: We no longer use 'playwright install chromium' if using the Chrome engine.
+# The server will automatically detect and use the system-installed Google Chrome binary.
+# If you want to use the bundled Chromium engine, run: playwright install chromium
 ```
 
 ### Step 4: Configuration (Environment Variables)
@@ -234,12 +238,14 @@ npm run dist
      - **Command Center:** Orchestrates other profiles.
    - Select Server & Proxy (or "No Proxy").
    - **Attach Scripts:** Select scripts to run in sequence.
+   - **Configure Engine & Fingerprint:** Select between Bundled Chromium (lightweight) or Genuine Chrome (high-trust TLS). Select OS Fingerprint, CPU cores, and RAM to ensure hardware coherence.
    - Click "Save & Start"
 
 6. **Monitor:**
    - Go to Home to see live screens.
    - Click "Take Control" for manual operation.
-   - Use **Start/Stop Recording** buttons to capture sessions.
+   - Use **Start/Stop Recording** buttons to capture sessions via FFmpeg.
+   - Drag and drop elements naturally using system-level input.
 
 ## Writing Scripts
 
@@ -256,6 +262,9 @@ You have access to these objects/functions without importing them:
 - `set_state(key, value)`: Set shared state for other profiles.
 - `pyautogui`: The PyAutoGUI library (controls the mouse on the profile's dedicated virtual display). **Note:** This moves the OS-level mouse on the Xvfb display, ensuring trusted input events.
 - `BeautifulSoup`: For HTML parsing.
+- `input`: The system-level InputController (xdotool wrapper) for advanced mouse/keyboard control.
+- `human_type(text, element=None)`: Types text with random delays and occasional mistakes to simulate a real user.
+- `human_move(x, y, duration=1.0)`: Moves the mouse to coordinates using a Bezier-like curve via system input.
 
 ### Dependencies
 
@@ -272,7 +281,11 @@ async def main(context):
     page = await context.new_page()
     await page.goto("https://instagram.com/accounts/login/")
 
-    await page.fill('input[name="username"]', account['username'])
+    # Use human_type for anti-detection
+    username_input = await page.query_selector('input[name="username"]')
+    if username_input:
+        await human_type(account['username'], element=username_input)
+
     await page.fill('input[name="password"]', account['password'])
     await page.click('button[type="submit"]')
 
@@ -296,7 +309,7 @@ async def main(context):
     # ... scraping logic ...
 ```
 
-### Example 2: Human-like Interaction with PyAutoGUI
+### Example 2: Human-like Interaction with System Input
 
 *Requirements: pyautogui*
 
@@ -317,16 +330,11 @@ async def main(context):
         center_x = box['x'] + box['width'] / 2
         center_y = box['y'] + box['height'] / 2
 
-        # Move mouse human-like with Bezier curves
-        # duration: random time between 0.5 and 1.5 seconds
-        # easeInOutQuad: smooth acceleration/deceleration
-        pyautogui.moveTo(
-            center_x,
-            center_y,
-            duration=random.uniform(0.5, 1.5),
-            tween=pyautogui.easeInOutQuad
-        )
-        pyautogui.click()
+        # Use the injected human_move helper (xdotool + Bezier curve)
+        await human_move(center_x, center_y, duration=random.uniform(0.5, 1.5))
+
+        # Click using system input
+        await input.mouse_click()
 
     await asyncio.sleep(5)
 ```
@@ -342,7 +350,7 @@ See [API.md](./API.md) for full API reference.
 - PostgreSQL 12+
 - 4GB RAM minimum (8GB recommended)
 - 2 CPU cores minimum
-- 10GB disk space (plus space for persistent browser profiles/videos)
+- 10GB disk space (plus space for persistent browser profiles, cookies, and video recordings)
 
 ### Client
 - Windows 10+, macOS 11+, or Linux
@@ -391,8 +399,10 @@ MIT License - see [LICENSE](./LICENSE)
 - [x] PyAutoGUI Support
 - [x] PostgreSQL Persistence
 - [x] Proxy History Tracking
-- [x] TLS Fingerprinting (Genuine Chrome)
-- [x] System-Level Input (Xdotool)
-- [x] Persistent Browser Profiles
+- [x] TLS Fingerprinting (Genuine Chrome Path)
+- [x] System-Level Input (Xdotool for trusted `isTrusted=true` events)
+- [x] Persistent Browser Profiles (Cookies/LocalStorage aging)
+- [x] FFmpeg Recording with Start/Stop Controls
+- [x] Advanced Stealth Injection (WebGL, Hardware Coherence, Plugins)
 - [ ] Docker support
 - [ ] LLM Orchestrator Integration

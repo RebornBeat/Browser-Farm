@@ -249,17 +249,15 @@ async def create_profile(data: ProfileCreate, _=verify_api_key, db: AsyncSession
     """Create a new profile"""
     global command_center_id
 
-    # Enforce Single Command Center Constraint
     if data.mode == ProfileMode.COMMAND_CENTER:
         if command_center_id:
             raise HTTPException(
                 status_code=400,
                 detail=f"A Command Center profile already exists (ID: {command_center_id})"
             )
-        command_center_id = "temp_placeholder" # Will be replaced by ID
+        command_center_id = "temp_placeholder"
 
-    # Create DB Model
-    profile_id = f"profile_{int(time.time() * 1000)}" # Unique ID based on timestamp
+    profile_id = f"profile_{int(time.time() * 1000)}"
 
     db_profile = DbProfile(
         id=profile_id,
@@ -270,6 +268,14 @@ async def create_profile(data: ProfileCreate, _=verify_api_key, db: AsyncSession
         timezone=data.timezone,
         locale=data.locale,
         geolocation=data.geolocation,
+        # NEW: Browser engine and fingerprint fields
+        browser_engine=data.browser_engine,
+        os_fingerprint=data.os_fingerprint,
+        gpu_vendor=data.gpu_vendor,
+        gpu_renderer=data.gpu_renderer,
+        hardware_concurrency=data.hardware_concurrency,
+        device_memory=data.device_memory,
+        # Existing fields
         scripts=data.scripts,
         requirements=data.requirements,
         memory_threshold_mb=data.memory_threshold_mb,
@@ -284,10 +290,13 @@ async def create_profile(data: ProfileCreate, _=verify_api_key, db: AsyncSession
         command_center_id = db_profile.id
         logger.info(f"Designated profile {profile_id} as Command Center.")
 
-    logger.info(f"Created profile {profile_id} (Mode: {data.mode}, Proxy: {data.proxy_id or 'None'})")
+    logger.info(
+        f"Created profile {profile_id} "
+        f"(Engine: {data.browser_engine}, OS: {data.os_fingerprint}, "
+        f"Mode: {data.mode}, Proxy: {data.proxy_id or 'None'})"
+    )
 
     return {"id": profile_id, "status": "created"}
-
 
 @app.get("/profiles/{profile_id}")
 async def get_profile(profile_id: str, _=verify_api_key, db: AsyncSession = Depends(get_db)):
@@ -309,6 +318,16 @@ async def get_profile(profile_id: str, _=verify_api_key, db: AsyncSession = Depe
         "user_agent": profile.user_agent,
         "timezone": profile.timezone,
         "locale": profile.locale,
+        # NEW fields
+        "browser_engine": profile.browser_engine,
+        "browser_version": profile.browser_version,
+        "os_fingerprint": profile.os_fingerprint,
+        "gpu_vendor": profile.gpu_vendor,
+        "gpu_renderer": profile.gpu_renderer,
+        "hardware_concurrency": profile.hardware_concurrency,
+        "device_memory": profile.device_memory,
+        "last_warmed": profile.last_warmed.isoformat() if profile.last_warmed else None,
+        # Existing fields
         "memory_mb": metrics.get("memory_mb", 0),
         "cpu_percent": metrics.get("cpu_percent", 0),
         "scripts": profile.scripts,
@@ -360,6 +379,16 @@ async def start_profile(
         "timezone": profile.timezone,
         "locale": profile.locale,
         "geolocation": profile.geolocation,
+        # NEW fields
+        "browser_engine": profile.browser_engine,
+        "browser_version": profile.browser_version,
+        "os_fingerprint": profile.os_fingerprint,
+        "gpu_vendor": profile.gpu_vendor,
+        "gpu_renderer": profile.gpu_renderer,
+        "hardware_concurrency": profile.hardware_concurrency,
+        "device_memory": profile.device_memory,
+        "last_warmed": profile.last_warmed,
+        # Existing fields
         "scripts": profile.scripts,
         "requirements": profile.requirements,
         "memory_threshold_mb": profile.memory_threshold_mb,
@@ -561,16 +590,19 @@ async def record_proxy_history(
 
 @app.get("/profiles/{profile_id}/screen")
 async def get_screen(profile_id: str, _=verify_api_key):
-    """Get live screenshot"""
+    """Get live screenshot (with crash protection)"""
     if profile_id not in context_manager.contexts:
         raise HTTPException(status_code=404, detail="Profile not running")
 
-    screenshot = await context_manager.get_screenshot(profile_id)
-
-    return StreamingResponse(
-        iter([screenshot]),
-        media_type="image/png"
-    )
+    try:
+        screenshot = await context_manager.get_screenshot(profile_id)
+        return StreamingResponse(iter([screenshot]), media_type="image/png")
+    except Exception as e:
+        # If Playwright fails to capture (e.g., page transitioning, X busy),
+        # return a placeholder instead of a 500 error to keep the client stable.
+        logger.warning(f"Screenshot capture failed for {profile_id}: {e}. Returning placeholder.")
+        placeholder = context_manager._generate_placeholder_image("Stream Paused...")
+        return StreamingResponse(iter([placeholder]), media_type="image/png")
 
 
 @app.websocket("/profiles/{profile_id}/stream")
@@ -595,10 +627,17 @@ async def stream_screen(websocket: WebSocket, profile_id: str):
 
 @app.websocket("/profiles/{profile_id}/control")
 async def control_screen(websocket: WebSocket, profile_id: str):
-    """Control browser via WebSocket"""
+    """Control browser via WebSocket with system-level input."""
     await websocket.accept()
 
     if profile_id not in context_manager.contexts:
+        await websocket.close()
+        return
+
+    # Get InputController for this profile's display
+    input_controller = context_manager.get_input_controller(profile_id)
+    if not input_controller:
+        logger.error(f"No InputController for profile {profile_id}")
         await websocket.close()
         return
 
@@ -610,7 +649,7 @@ async def control_screen(websocket: WebSocket, profile_id: str):
         return
 
     page = pages[0]
-    handler = VNCHandler(page)
+    handler = VNCHandler(input_controller, page)
 
     try:
         while True:
@@ -618,7 +657,17 @@ async def control_screen(websocket: WebSocket, profile_id: str):
             await handler.process_action(message)
 
     except WebSocketDisconnect:
-        pass
+        # Ensure mouse button is released on disconnect (prevent stuck drag)
+        try:
+            await input_controller.mouse_up("left")
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Control WebSocket error: {e}")
+        try:
+            await input_controller.mouse_up("left")
+        except Exception:
+            pass
 
 
 @app.post("/profiles/{profile_id}/screenshot")
@@ -664,38 +713,76 @@ async def get_screenshot(filename: str, _=verify_api_key):
     return FileResponse(filepath)
 
 
+@app.post("/profiles/{profile_id}/recording/start")
+async def start_recording(profile_id: str, _=verify_api_key):
+    """Start video recording for a profile."""
+    if profile_id not in context_manager.contexts:
+        raise HTTPException(status_code=404, detail="Profile not running")
+    try:
+        filename = await context_manager.start_recording(profile_id)
+        return {"status": "recording", "filename": filename}
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/profiles/{profile_id}/recording/stop")
+async def stop_recording(profile_id: str, _=verify_api_key):
+    """Stop video recording for a profile."""
+    if profile_id not in context_manager.recorders:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    filename = await context_manager.stop_recording(profile_id)
+    return {"status": "stopped", "filename": filename}
+
+
+@app.get("/profiles/{profile_id}/recording/status")
+async def get_recording_status(profile_id: str, _=verify_api_key):
+    """Get recording status for a profile."""
+    if profile_id not in context_manager.recorders:
+        return {"recording": False}
+    return context_manager.get_recording_status(profile_id)
+
+
+@app.delete("/screenshots/{filename}")
+async def delete_screenshot(filename: str, _=verify_api_key):
+    """Delete a screenshot file."""
+    # Security: prevent path traversal
+    if "/" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    deleted = await context_manager.delete_screenshot(filename)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+    return {"status": "deleted"}
+
+
+@app.delete("/videos/{profile_id}/{filename}")
+async def delete_video(profile_id: str, filename: str, _=verify_api_key):
+    """Delete a video file."""
+    if "/" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    deleted = await context_manager.delete_video(profile_id, filename)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Video not found")
+    return {"status": "deleted"}
+
+
 @app.get("/profiles/{profile_id}/videos")
 async def list_videos(profile_id: str, _=verify_api_key):
-    """List all video recordings for a profile"""
-    # Videos are stored in data_dir / "videos" / profile_id
-    video_dir = context_manager.data_dir / "videos" / profile_id
-
-    if not video_dir.exists():
-        return {"videos": []}
-
-    # Find all .webm files (Playwright default format)
-    files = sorted(video_dir.glob("*.webm"), reverse=True)
-
-    videos = []
-    for file in files:
-        videos.append({
-            "id": file.stem,
-            "timestamp": file.stat().st_mtime,
-            "url": f"/videos/{profile_id}/{file.name}",
-            "size_bytes": file.stat().st_size
-        })
-
+    """List all video recordings for a profile."""
+    videos = context_manager.get_profile_videos(profile_id)
     return {"videos": videos}
 
 
 @app.get("/videos/{profile_id}/{filename}")
 async def get_video(profile_id: str, filename: str, _=verify_api_key):
-    """Serve a specific video file"""
-    filepath = context_manager.data_dir / "videos" / profile_id / filename
-
+    """Serve a specific video file."""
+    if "/" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if profile_id not in context_manager.profile_data_dirs:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    video_dir = context_manager.profile_data_dirs[profile_id] / "videos"
+    filepath = video_dir / filename
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Video not found")
-
     return FileResponse(filepath)
 
 

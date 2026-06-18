@@ -60,7 +60,7 @@ class Profile(BaseModel):
     id: str
     name: str
     mode: ProfileMode = ProfileMode.AUTOMATED
-    proxy_id: Optional[str] = None  # Updated: Optional to support "No Proxy"
+    proxy_id: Optional[str] = None
 
     # Browser Configuration
     user_agent: Optional[str] = None
@@ -68,35 +68,56 @@ class Profile(BaseModel):
     locale: str = "en-US"
     geolocation: Optional[Geolocation] = None
 
-    # Script & Execution Configuration
-    scripts: List[str] = []            # List of script code strings (Chain)
-    requirements: List[str] = []       # List of pip packages e.g. ["pyautogui", "bs4"]
+    # NEW: Browser Engine Selection
+    browser_engine: str = "chromium"  # "chromium" or "chrome"
+    browser_version: Optional[str] = None  # Detected at runtime
 
-    # Resource Management
-    memory_threshold_mb: int = 400
-
-    # State
-    status: ProfileStatus = ProfileStatus.IDLE
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-
-
-class ProfileCreate(BaseModel):
-    name: str
-    mode: ProfileMode = ProfileMode.AUTOMATED
-    proxy_id: Optional[str] = None  # Updated: Optional to support "No Proxy"
-
-    # Browser Configuration
-    user_agent: Optional[str] = None
-    timezone: str = "America/New_York"
-    locale: str = "en-US"
-    geolocation: Optional[Geolocation] = None
+    # NEW: Fingerprint Coherence
+    os_fingerprint: str = "windows"  # "windows", "macos", "linux"
+    gpu_vendor: Optional[str] = None
+    gpu_renderer: Optional[str] = None
+    hardware_concurrency: int = 8
+    device_memory: int = 8
 
     # Script & Execution Configuration
     scripts: List[str] = []
     requirements: List[str] = []
 
     # Resource Management
-    memory_threshold_mb: int = 400
+    memory_threshold_mb: int = 1500
+
+    # State
+    status: ProfileStatus = ProfileStatus.IDLE
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    # NEW: Profile aging tracking
+    last_warmed: Optional[datetime] = None
+
+
+class ProfileCreate(BaseModel):
+    name: str
+    mode: ProfileMode = ProfileMode.AUTOMATED
+    proxy_id: Optional[str] = None
+
+    # Browser Configuration
+    user_agent: Optional[str] = None
+    timezone: str = "America/New_York"
+    locale: str = "en-US"
+    geolocation: Optional[Geolocation] = None
+
+    # NEW: Browser Engine Selection
+    browser_engine: str = "chromium"  # "chromium" or "chrome"
+    os_fingerprint: str = "windows"  # "windows", "macos", "linux"
+    gpu_vendor: Optional[str] = None
+    gpu_renderer: Optional[str] = None
+    hardware_concurrency: int = 8
+    device_memory: int = 8
+
+    # Script & Execution Configuration
+    scripts: List[str] = []
+    requirements: List[str] = []
+
+    # Resource Management
+    memory_threshold_mb: int = 1500
 
 
 class ProfileMetrics(BaseModel):

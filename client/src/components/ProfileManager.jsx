@@ -30,12 +30,17 @@ function ProfileManager() {
   const [newProfile, setNewProfile] = useState({
     name: "",
     serverId: "",
-    proxyId: "", // Empty string means "Select..." initially
+    proxyId: "",
     accountIds: [],
     userAgent: "",
     timezone: "America/New_York",
     locale: "en-US",
-    memoryThresholdMb: 400,
+    memoryThresholdMb: 1500,
+    // NEW: Browser engine and fingerprint
+    browserEngine: "chromium", // "chromium" or "chrome"
+    osFingerprint: "windows", // "windows", "macos", "linux"
+    hardwareConcurrency: 8,
+    deviceMemory: 8,
   });
 
   // --- DATA LOADING & SYNCING ---
@@ -163,6 +168,11 @@ function ProfileManager() {
         scripts: scriptCodes,
         requirements: requirements,
         memory_threshold_mb: newProfile.memoryThresholdMb,
+        // NEW: Browser engine and fingerprint
+        browser_engine: newProfile.browserEngine,
+        os_fingerprint: newProfile.osFingerprint,
+        hardware_concurrency: newProfile.hardwareConcurrency,
+        device_memory: newProfile.deviceMemory,
       });
 
       if (proxy) {
@@ -176,6 +186,8 @@ function ProfileManager() {
         mode: profileMode,
         proxyId: proxy ? proxy.id : null,
         scriptIds: selectedScriptIds,
+        browserEngine: newProfile.browserEngine,
+        osFingerprint: newProfile.osFingerprint,
         status: "idle",
         createdAt: new Date().toISOString(),
       };
@@ -203,6 +215,10 @@ function ProfileManager() {
       timezone: "America/New_York",
       locale: "en-US",
       memoryThresholdMb: 400,
+      browserEngine: "chromium",
+      osFingerprint: "windows",
+      hardwareConcurrency: 8,
+      deviceMemory: 8,
     });
     setSelectedScriptIds([]);
     setProfileMode("automated");
@@ -712,6 +728,102 @@ function ProfileManager() {
                     })
                   }
                 />
+              </div>
+
+              {/* Browser Engine Selection */}
+              <div className="border-t border-dark-700 pt-4 mt-4">
+                <h4 className="text-sm font-semibold text-white mb-3">
+                  Browser Engine & Fingerprint
+                </h4>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-dark-300 mb-2">
+                      Browser Engine
+                    </label>
+                    <select
+                      className="input w-full"
+                      value={newProfile.browserEngine}
+                      onChange={(e) =>
+                        setNewProfile({
+                          ...newProfile,
+                          browserEngine: e.target.value,
+                        })
+                      }
+                    >
+                      <option value="chromium">
+                        Chromium (Lightweight, ~280MB)
+                      </option>
+                      <option value="chrome">
+                        Google Chrome (High-Trust TLS, ~600MB)
+                      </option>
+                    </select>
+                    <p className="text-xs text-dark-500 mt-1">
+                      {newProfile.browserEngine === "chrome"
+                        ? "Genuine Chrome binary. Best for high-trust sites. Requires Chrome installed on server."
+                        : "Bundled Chromium. Good for most automation. Spoofed TLS."}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm text-dark-300 mb-2">
+                      OS Fingerprint
+                    </label>
+                    <select
+                      className="input w-full"
+                      value={newProfile.osFingerprint}
+                      onChange={(e) =>
+                        setNewProfile({
+                          ...newProfile,
+                          osFingerprint: e.target.value,
+                        })
+                      }
+                    >
+                      <option value="windows">Windows 10/11</option>
+                      <option value="macos">macOS</option>
+                      <option value="linux">Linux</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 mt-3">
+                  <div>
+                    <label className="block text-sm text-dark-300 mb-2">
+                      CPU Cores (hardware_concurrency)
+                    </label>
+                    <input
+                      type="number"
+                      className="input w-full"
+                      min="2"
+                      max="32"
+                      value={newProfile.hardwareConcurrency}
+                      onChange={(e) =>
+                        setNewProfile({
+                          ...newProfile,
+                          hardwareConcurrency: parseInt(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-dark-300 mb-2">
+                      Device Memory (GB)
+                    </label>
+                    <input
+                      type="number"
+                      className="input w-full"
+                      min="2"
+                      max="32"
+                      value={newProfile.deviceMemory}
+                      onChange={(e) =>
+                        setNewProfile({
+                          ...newProfile,
+                          deviceMemory: parseInt(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                </div>
               </div>
 
               <div>

@@ -282,6 +282,48 @@ class BrowserFarmClient {
   }
 
   // -----------------------------------------------------------
+  // Video Recording
+  // -----------------------------------------------------------
+
+  async startRecording(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post(
+      `/profiles/${profileId}/recording/start`,
+    );
+    return data;
+  }
+
+  async stopRecording(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.post(`/profiles/${profileId}/recording/stop`);
+    return data;
+  }
+
+  async getRecordingStatus(serverId, profileId) {
+    const client = this.getClient(serverId);
+    const { data } = await client.get(
+      `/profiles/${profileId}/recording/status`,
+    );
+    return data;
+  }
+
+  // -----------------------------------------------------------
+  // Media Deletion
+  // -----------------------------------------------------------
+
+  async deleteScreenshot(serverId, filename) {
+    const client = this.getClient(serverId);
+    const { data } = await client.delete(`/screenshots/${filename}`);
+    return data;
+  }
+
+  async deleteVideo(serverId, profileId, filename) {
+    const client = this.getClient(serverId);
+    const { data } = await client.delete(`/videos/${profileId}/${filename}`);
+    return data;
+  }
+
+  // -----------------------------------------------------------
   // WebSocket URLs
   // -----------------------------------------------------------
 

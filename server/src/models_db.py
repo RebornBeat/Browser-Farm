@@ -27,32 +27,36 @@ class ProfileModeDB(str, enum.Enum):
 # -----------------------------------------------
 
 class DbProfile(Base):
-    """
-    SQL Table for Profiles.
-    Replaces the in-memory 'profiles' dictionary.
-    """
     __tablename__ = "profiles"
 
-    # Primary Key (Matches the generated ID from server.py)
     id = Column(String, primary_key=True, index=True)
-
-    # Core Info
     name = Column(String, nullable=False)
     mode = Column(Enum(ProfileModeDB), default=ProfileModeDB.AUTOMATED, nullable=False)
 
     # Configuration
-    proxy_id = Column(String, nullable=True) # Optional: ID of the proxy
+    proxy_id = Column(String, nullable=True)
     user_agent = Column(String, nullable=True)
     timezone = Column(String, default="America/New_York")
     locale = Column(String, default="en-US")
-    geolocation = Column(JSONB, nullable=True) # Stores {"lat": float, "lng": float}
+    geolocation = Column(JSONB, nullable=True)
 
-    # Execution Config (Stored as JSONB arrays)
-    scripts = Column(JSONB, default=[])       # List of script code strings
-    requirements = Column(JSONB, default=[])  # List of pip package strings
+    # NEW: Browser Engine Selection
+    browser_engine = Column(String, default="chromium", nullable=False)
+    browser_version = Column(String, nullable=True)
+
+    # NEW: Fingerprint Coherence
+    os_fingerprint = Column(String, default="windows", nullable=False)
+    gpu_vendor = Column(String, nullable=True)
+    gpu_renderer = Column(String, nullable=True)
+    hardware_concurrency = Column(Integer, default=8)
+    device_memory = Column(Integer, default=8)
+
+    # Execution Config
+    scripts = Column(JSONB, default=[])
+    requirements = Column(JSONB, default=[])
 
     # Resource Management
-    memory_threshold_mb = Column(Integer, default=400)
+    memory_threshold_mb = Column(Integer, default=1500)
 
     # State Management
     status = Column(Enum(ProfileStatusDB), default=ProfileStatusDB.IDLE, nullable=False)
@@ -60,9 +64,8 @@ class DbProfile(Base):
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    def __repr__(self):
-        return f"<Profile(id={self.id}, name={self.name}, status={self.status})>"
+    # NEW: Profile aging
+    last_warmed = Column(DateTime(timezone=True), nullable=True)
 
 
 class DbProxy(Base):

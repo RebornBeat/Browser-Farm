@@ -20,16 +20,16 @@ function Home() {
 
     // Build list of RUNNING profiles from all connected servers
     const runningProfiles = [];
+    const validProfileIds = new Set(); // Track IDs that actually exist on servers
 
     for (const server of servers) {
-      // Only query online servers
       if (healthData[server.id]?.status !== "online") continue;
 
       try {
         const serverProfiles = await apiClient.listProfiles(server.id);
         serverProfiles.forEach((p) => {
+          validProfileIds.add(p.id); // Mark as valid
           if (p.status === "running") {
-            // Merge with local data to get friendly name
             const local = localProfiles.find((lp) => lp.id === p.id);
             runningProfiles.push({
               id: p.id,
@@ -45,22 +45,28 @@ function Home() {
 
     setAvailableProfiles(runningProfiles);
 
+    // CLEANUP LOGIC: Remove deleted profiles from Home Screen config
+    const initialLength = currentScreens.length;
+    currentScreens = currentScreens.filter((screen) =>
+      validProfileIds.has(screen.profileId),
+    );
+
+    if (currentScreens.length !== initialLength) {
+      console.log("Cleaning up deleted profiles from Home screen.");
+      await store.set("settings", { ...settings, homeScreens: currentScreens });
+    }
+
     // AUTO-POPULATE LOGIC
-    // If screens are empty, fill with first 4 running profiles found
     if (currentScreens.length === 0 && runningProfiles.length > 0) {
       currentScreens = runningProfiles.slice(0, 4).map((p) => ({
         serverId: p.serverId,
         profileId: p.id,
         profileName: p.name,
       }));
-
-      // Save to store immediately so it persists
       await store.set("settings", { ...settings, homeScreens: currentScreens });
     }
 
     setScreens(currentScreens);
-
-    // Update selection state for the modal
     setSelectedProfileIds(currentScreens.map((s) => s.profileId));
   }, [servers, healthData]);
 

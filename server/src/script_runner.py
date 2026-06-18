@@ -59,7 +59,8 @@ class ScriptRunner:
         requirements: List[str],
         accounts: Dict[str, dict],
         display_env: str,
-        log_dir: Path
+        log_dir: Path,
+        input_controller=None  # NEW: System-level input
     ):
         self.profile_id = profile_id
         self.context = context
@@ -69,6 +70,7 @@ class ScriptRunner:
         self.accounts = accounts
         self.display_env = display_env
         self.log_dir = log_dir
+        self.input_controller = input_controller  # NEW
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         self.task: Optional[asyncio.Task] = None
@@ -231,9 +233,17 @@ class ScriptRunner:
                     "pyautogui": _pyautogui,
                     "BeautifulSoup": _BeautifulSoup,
 
+                    # NEW: Human-like helpers
+                    "human_type": human_type,
+                    "human_move": human_move,
+
+                    # NEW: System input controller (for advanced scripts)
+                    "input": self.input_controller,
+
                     # Standard Libs
                     "asyncio": asyncio,
                     "os": os,
+                    "random": __import__("random"),
                     "__name__": "__main__",
                 }
 
@@ -257,3 +267,66 @@ class ScriptRunner:
             script_logger.error(f"Script error: {e}", exc_info=True)
             self.status = ProfileStatus.CRASHED
             raise
+
+    # Prepare human_type helper
+    async def human_type(text: str, element=None, min_delay: float = 0.05, max_delay: float = 0.15, mistake_rate: float = 0.02):
+        """
+        Type text with human-like delays and occasional mistakes.
+
+        Args:
+            text: Text to type
+            element: Optional Playwright element to type into
+            min_delay: Minimum delay between keystrokes (seconds)
+            max_delay: Maximum delay between keystrokes (seconds)
+            mistake_rate: Probability of typing a wrong character (0.0-1.0)
+        """
+        import random as _r
+        for char in text:
+            # Random mistake
+            if _r.random() < mistake_rate:
+                wrong_char = _r.choice("abcdefghijklmnopqrstuvwxyz")
+                if element:
+                    await element.type(wrong_char, delay=int(_r.uniform(min_delay, max_delay) * 1000))
+                else:
+                    await self.context.pages[0].keyboard.type(wrong_char)
+                await asyncio.sleep(_r.uniform(0.1, 0.3))
+                # Backspace
+                if element:
+                    await element.press("Backspace")
+                else:
+                    await self.context.pages[0].keyboard.press("Backspace")
+                await asyncio.sleep(_r.uniform(0.1, 0.2))
+
+            # Type correct character
+            if element:
+                await element.type(char, delay=int(_r.uniform(min_delay, max_delay) * 1000))
+            else:
+                await self.context.pages[0].keyboard.type(char)
+            await asyncio.sleep(_r.uniform(min_delay, max_delay))
+
+    # Prepare human_move helper (uses system input if available)
+    async def human_move(x: int, y: int, duration: float = 1.0):
+        """
+        Move mouse to coordinates with human-like curve.
+        Uses system-level input (xdotool) if available, falls back to Playwright.
+        """
+        import random as _r
+        if self.input_controller:
+            # Use system input with intermediate points for curve
+            current_steps = max(int(duration * 60), 10)  # 60 FPS
+            # Generate Bezier-like path
+            for i in range(current_steps):
+                progress = i / current_steps
+                # Ease-in-out
+                eased = progress * progress * (3 - 2 * progress)
+                intermediate_x = int(x * eased + _r.uniform(-2, 2))
+                intermediate_y = int(y * eased + _r.uniform(-2, 2))
+                await self.input_controller.mouse_move(intermediate_x, intermediate_y)
+                await asyncio.sleep(duration / current_steps)
+            # Final position
+            await self.input_controller.mouse_move(x, y)
+        else:
+            # Fallback to Playwright
+            page = self.context.pages[0] if self.context.pages else None
+            if page:
+                await page.mouse.move(x, y, steps=int(duration * 50))
